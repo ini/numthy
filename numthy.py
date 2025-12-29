@@ -16,7 +16,7 @@ from decimal import Decimal
 from fractions import Fraction
 from functools import lru_cache, reduce
 from heapq import heappop, heappush
-from math import ceil, factorial, gcd, inf, isqrt, lcm, log, prod, sqrt
+from math import factorial, gcd, inf, isqrt, lcm, log, prod, sqrt
 from operator import sub
 from typing import Any, Callable, Hashable, Iterable, Iterator
 
@@ -66,7 +66,7 @@ def is_prime(n: int) -> bool:
         bases = (4230279247111683200, 14694767155120705706, 16641139526367750375)
     elif n < 55245642489451:
         bases = (2, 141889084524735, 1199124725622454117, 11096072698276303650)
-    elif n < 18446744073709551616: # 2^64
+    elif n < 18446744073709551616:  # 2^64
         return _baillie_psw(n)
     else:
         bases = (secrets.randbelow(n - 3) + 2 for _ in range(64))
@@ -85,7 +85,7 @@ def next_prime(n: int) -> int:
     if n < 2:
         return 2
 
-    a = (n + 1) | 1 # next odd number
+    a = (n + 1) | 1  # next odd number
     while not is_prime(a):
         a += 2
 
@@ -112,8 +112,8 @@ def random_prime(num_bits: int, *, safe: bool = False) -> int:
     # Generate candidates
     while True:
         k = num_bits - 1 if safe else num_bits
-        middle = secrets.randbits(k - 2) # all random bits except first/last
-        p = (1 << (k - 1)) | (middle << 1) | 1 # force first/last bit to 1
+        middle = secrets.randbits(k - 2)  # all random bits except first/last
+        p = (1 << (k - 1)) | (middle << 1) | 1  # force first/last bit to 1
         if is_prime(p):
             if safe:
                 if is_prime(q := 2*p + 1):
@@ -160,8 +160,8 @@ def primes(
     if high == num == inf:
         sieve_size = DEFAULT_SIEVE_SIZE
     else:
-        n = num + 1.25506 * low / max(log(low), 1) # Rosser & Schoenfeld bound (1962)
-        upper_bound = n * (log(n) + log(log(n))) # upper bound on the nth prime
+        n = num + 1.25506 * low / max(log(low), 1)  # Rosser & Schoenfeld bound (1962)
+        upper_bound = n * (log(n) + log(log(n)))  # upper bound on the nth prime
         sieve_size = int(min(MAX_SIEVE_SIZE, high - low + 1, upper_bound - low))
 
     # Initial list of small primes to use for the segmented sieve
@@ -247,18 +247,18 @@ def _miller_rabin(n: int, bases: Iterable[int] = (2,)) -> bool:
     # Perform a Miller-Rabin test for each base
     for a in bases:
         if (a := a % n) == 0:
-            continue # probable prime
+            continue  # probable prime
 
         x = pow(a, d, n)
         if x == 1 or x == n - 1:
-            continue # probable prime
+            continue  # probable prime
 
         for _ in range(s - 1):
             x = (x * x) % n
             if x == n - 1:
-                break # probable prime
+                break  # probable prime
         else:
-            return False # composite
+            return False  # composite
 
     return True
 
@@ -306,7 +306,7 @@ def _baillie_psw(n: int) -> bool:
     # 1st extra-strong condition: U_d = 0 (mod n) and V = ± 2 (mod n)
     if U == 0 and (V == 2 or V == n - 2):
         return True
-    
+
     # 2nd extra-strong condition: V_{2^r * d} = 0 (mod n) for some 0 <= r < s - 1
     for _ in range(s - 2):
         if V == 0: return True
@@ -371,7 +371,7 @@ def _lmo(
         S2 = Σ μ(n) f(n) φ_f(x/n, b) over special leaves (n, b)
 
     and the generalized Meissel-Lehmer formula becomes:
-     
+
         F(x) = F(y) - 1 - P2 + φ_f(x, a) = F(y) - 1 - P2 + S1 + S2.
 
     Ideally `f()` and `f_prefix_sum()` can be calculated efficiently in O(1) time
@@ -384,7 +384,7 @@ def _lmo(
     # where y is the upper bound on the small primes that are computed directly
     y = int(c * iroot(x, 3) * (log(x) ** 2))
     y = min(max(y, iroot(x, 3)), iroot(x * x, 5))
-    y = max(y, 2) # we need y >= 2 to use an odd-only sieve starting at y + 1
+    y = max(y, 2)  # we need y >= 2 to use an odd-only sieve starting at y + 1
 
     # Count primes up to y
     small_primes = tuple(primes(high=y))
@@ -411,8 +411,8 @@ def _lmo(
     # Sum the leaves in the tree created by either
     # the standard recurrence φ(x, a) = φ(x, a-1) - φ(x/p_a, a-1)
     # or the weighted recurrence φ_f(x, a) = φ_f(x, a-1) - f(p_a) * φ_f(x/p_a, a-1)
-    S1 = _lmo_s1(x, k, mu, small_primes, f, f_prefix_sum) # sum over ordinary leaves
-    S2 = _lmo_s2(x, k, lpf, mu, small_primes, f) # sum over special leaves
+    S1 = _lmo_s1(x, k, mu, small_primes, f, f_prefix_sum)  # sum over ordinary leaves
+    S2 = _lmo_s2(x, k, lpf, mu, small_primes, f)  # sum over special leaves
 
     return F_y - 1 - P2 + S1 + S2
 
@@ -431,13 +431,13 @@ def _lmo_p2(
     """
     sqrt_x = isqrt(x)
     sieve_limit = x // y
-    sieve_start = (y + 1) | 1 # round up to odd
-    sieve_size = y + (y & 1) # round up to even
+    sieve_start = (y + 1) | 1  # round up to odd
+    sieve_size = y + (y & 1)  # round up to even
 
     # Compute a generalized P2(x, a) = sum_{y < p <= sqrt(x)} f(p) * [F(x/p) − F(p − 1)]
     # Find the weighted sum f(p) * F(x/p) for all primes in the interval (y, sqrt(x)]
     # Or equivalently, the sum over all x/p in the inverse interval [sqrt(x), x/y)
-    # Also accumulate the sum f(p)^2 for all primes in the interval (y, sqrt(x)]     
+    # Also accumulate the sum f(p)^2 for all primes in the interval (y, sqrt(x)]
     P2 = 0
     sum_f2 = 0
     F_sqrt_x = F_y
@@ -478,7 +478,7 @@ def _lmo_p2(
     # Now subtract sum_{y < p <= sqrt(x)} f(p) * F(p − 1)
     # We can use the telescoping identity with a_i = f(p_i), A_i = F(p_i)
     # which is A_i^2 - A_{i-1}^2 = 2 a_i A_{i-1} + a_i^2
-    # Over y < p_i <= sqrt(x), the sum Σ f(p) * F(p − 1) = Σ a_i A_{i-1} 
+    # Over y < p_i <= sqrt(x), the sum Σ f(p) * F(p − 1) = Σ a_i A_{i-1}
     # becomes 1/2 [F(sqrt(x))^2 - F(y)^2 - Σ f(p)^2]
     is_int = isinstance(sum_f2, int)
     double_count_sum = F_sqrt_x*F_sqrt_x - F_y*F_y - sum_f2
@@ -543,7 +543,7 @@ def _lmo_s2(
     phi = [0] * a
     sieve_limit = x // y
     sieve_size = isqrt(sieve_limit) - 1
-    sieve_size = 2**(sieve_size.bit_length()) # round up to next power of 2
+    sieve_size = 2**(sieve_size.bit_length())  # round up to next power of 2
     tree_size = sieve_size // 2
 
     for low in range(1, sieve_limit, sieve_size):
@@ -677,7 +677,7 @@ def _fenwick_tree_query_path(index: int) -> tuple[int, ...]:
     index += 1
     while index > 0:
         path.append(index - 1)
-        index &= index - 1 # clears the lowest set bit
+        index &= index - 1  # clears the lowest set bit
 
     return tuple(path)
 
@@ -689,7 +689,7 @@ def _fenwick_tree_update_path(index: int, tree_size: int) -> tuple[int, ...]:
     path = []
     while index < tree_size:
         path.append(index)
-        index |= index + 1 # sets the lowest unset bit
+        index |= index + 1  # sets the lowest unset bit
 
     return tuple(path)
 
@@ -828,7 +828,7 @@ def _gen_prime_factors(n: int) -> Iterator[int]:
             num_bits = n.bit_length()
             if num_bits >= 64:
                 # Try ECM initially (good at finding small/medium size factors)
-                max_curves = 12 if num_bits >= 128 else None # None -> use ECM default
+                max_curves = 12 if num_bits >= 128 else None  # None -> use ECM default
                 d = _ecm(n, max_curves=max_curves)
                 if 1 < d < n:
                     stack.append(d)
@@ -875,13 +875,13 @@ def _brent(n: int, max_attempts: int = 8, batch_size: int = 256) -> int:
         # Random starting point and polynomial f(x) = x^2 + c
         y = secrets.randbelow(n - 3) + 2
         c = secrets.randbelow(n - 3) + 2
-        G, r = 1, 1 # batch GCD, range
+        G, r = 1, 1  # batch GCD, range
 
         # Save checkpoint x, iterate y -> f(y) for r steps, then iterate r more steps
         # while also accumulating products q = prod (x - y) over the range.
         # When gcd(q, n) > 1, we've found a factor.
         while G == 1:
-            x, q = y, 1 # checkpoint, batch product
+            x, q = y, 1  # checkpoint, batch product
             for _ in range(r):
                 y = (y * y + c) % n
 
@@ -906,9 +906,9 @@ def _brent(n: int, max_attempts: int = 8, batch_size: int = 256) -> int:
                 G = gcd(abs(x - y), n)
 
         if G < n:
-            return G # success, found non-trivial factor
+            return G  # success, found non-trivial factor
 
-    return n # failure, return trivial factor
+    return n  # failure, return trivial factor
 
 def _ecm(
     n: int,
@@ -984,7 +984,7 @@ def _ecm(
             if 1 < g < n:
                 return g
 
-    return 1 # failure, return trivial factor
+    return 1  # failure, return trivial factor
 
 def _montgomery_add(
     P: tuple[int, int],
@@ -1005,7 +1005,7 @@ def _montgomery_add(
     C, D = X2 + Z2, X2 - Z2
     DA, CB = D*A % mod, C*B % mod
     plus, minus = DA + CB, DA - CB
-    X3 = (Zd * ((plus  * plus)  % mod)) % mod
+    X3 = (Zd * ((plus * plus) % mod)) % mod
     Z3 = (Xd * ((minus * minus) % mod)) % mod
     return X3, Z3
 
@@ -1039,13 +1039,13 @@ def _montgomery_ladder(
     Montgomery ladder for scalar multiplication [k]P using x-only arithmetic.
     """
     if k <= 0:
-        return (1, 0) # O (point at infinity)
+        return (1, 0)  # O (point at infinity)
     if k == 1:
         return (P[0] % mod, P[1] % mod)
 
-    R0 = (1, 0) # O (point at infinity)
+    R0 = (1, 0)  # O (point at infinity)
     R1 = diff = (P[0] % mod, P[1] % mod)
-    for bit in bin(k)[2:]: # include leading 1
+    for bit in bin(k)[2:]:  # include leading 1
         if bit == '0':
             R1 = _montgomery_add(R0, R1, diff, mod)
             R0 = _montgomery_double(R0, A24, mod)
@@ -1069,22 +1069,22 @@ def _ecm_suyama_curve(
     """
     sigma %= n
     if sigma == 0:
-        return None, None, None # degenerate, choose another sigma
+        return None, None, None  # degenerate, choose another sigma
 
     u, v = (sigma*sigma - 5) % n, (4*sigma) % n
     if u == 0 or v == 0:
-        return None, None, None # degenerate, choose another sigma
+        return None, None, None  # degenerate, choose another sigma
 
     # Calculate starting point P = (X1:Z1) = (u^3:v^3)
-    X1, Z1 = u3, v3 = (u*u*u) % n, (v*v*v) % n
+    X1, Z1 = u3, _ = (u*u*u) % n, (v*v*v) % n
 
     # Check for non-trivial factor of n
     denominator = (16*u3*v) % n
     g = gcd(denominator, n)
     if 1 < g < n:
-        return None, None, g # found non-trivial factor
+        return None, None, g  # found non-trivial factor
     if g == n or denominator == 0:
-        return None, None, None # degenerate, choose another sigma
+        return None, None, None  # degenerate, choose another sigma
 
     # Calculate A24 = (A + 2) / 4 = (v-u)^3 * (3u+v) / (16*u^3*v)
     t = (v - u) % n
@@ -1092,16 +1092,16 @@ def _ecm_suyama_curve(
     numerator = (t3 * ((3*u + v) % n)) % n
     A24 = (numerator * pow(denominator, -1, n)) % n
     if A24 == 0:
-        return None, None, None # degenerate, choose another sigma
+        return None, None, None  # degenerate, choose another sigma
 
     # Reject (likely) singular curves by checking gcd(A^2 - 4, n)
     A = (4*A24 - 2) % n
     discriminant = (A*A - 4) % n
     g = gcd(discriminant, n)
     if 1 < g < n:
-        return None, None, g # found non-trivial factor
+        return None, None, g  # found non-trivial factor
     if g == n or discriminant == 0:
-        return None, None, None # degenerate, choose another sigma
+        return None, None, None  # degenerate, choose another sigma
 
     return A24, (X1, Z1), None
 
@@ -1140,7 +1140,7 @@ def _ecm_stage_2_plan(
     # Choose giant step size D ≈ √B2, but ensure D/2 ≤ B1
     # This avoids k = 0 cases and huge baby-step sets
     giant_step_size = max(min(isqrt(B2), 2*B1), 6)
-    giant_step_size += giant_step_size % 2 # round up to even
+    giant_step_size += giant_step_size % 2  # round up to even
 
     # For each prime p in (B1, B2], represent as p = kD ± offset
     max_offset = giant_step_size // 2
@@ -1169,7 +1169,7 @@ def _ecm_stage_2(
     Returns a non-trivial factor of n if found, otherwise 1.
     """
     D, giant_step_to_offsets, baby_steps = plan
-    if not D or not giant_step_to_offsets: return 1 # failure, return trivial factor
+    if not D or not giant_step_to_offsets: return 1  # failure, return trivial factor
 
     # Baby steps - compute [d]Q for small offsets d
     # Primes p in (B1, B2] are written as p = k*D ± d. Precompute [d]Q values.
@@ -1286,7 +1286,7 @@ def _siqs(
     # Use heuristic factor base bound B ≈ e^(1/2 sqrt(log(n) * log(log(n))))
     if B is None:
         log_bits = bits.bit_length()
-        B = 1 << (isqrt(bits * log_bits) >> 1) 
+        B = 1 << (isqrt(bits * log_bits) >> 1)
         B = max(300, min(B, 50000))
 
     # Adaptively set sieve half-width M based on input size and factor base bound
@@ -1304,26 +1304,26 @@ def _siqs(
     # Adaptively set max number of polynomials to use based on input size
     if max_polynomial_count is None:
         poly_thresholds = [(140, 2000), (155, 6000)]
-        max_polynomial_count = _threshold_select(bits, poly_thresholds, 9000) 
+        max_polynomial_count = _threshold_select(bits, poly_thresholds, 9000)
 
     # Collect relations (X, pf) where X^2 ≡ Q (mod n), Q is a B-smooth integer,
     # and pf[p] = e is the prime factorization of Q over the factor base
     factor_base = _build_factor_base(n, B)
     min_relation_count = len(factor_base) + 30
-    L = B * large_prime_multiplier # large prime bound
+    L = B * large_prime_multiplier  # large prime bound
     relations, lucky_factor = _collect_relations(
         n, factor_base, B, L, M, min_relation_count, max_polynomial_count)
 
     # Check early termination conditions
     if lucky_factor is not None:
-        return lucky_factor # success, gcd(lp, n) was non-trivial
+        return lucky_factor  # success, gcd(lp, n) was non-trivial
     if len(relations) <= len(factor_base):
-        return 1 # failure, null space will be trivial
+        return 1  # failure, null space will be trivial
 
     # Build a relation matrix over GF(2), where each row is a bit-packed integer
     # and each bit j is set only when prime j has odd exponent in that relation
     fb_primes, _, _ = zip(*factor_base)
-    idx = {p: i for i, p in enumerate((-1,) + fb_primes)} # prime index
+    idx = {p: i for i, p in enumerate((-1,) + fb_primes)}  # prime index
     rows = [sum(2**idx[p] for p, e in pf.items() if e % 2 == 1) for _, pf in relations]
 
     # Find null space of the relation matrix over GF(2)
@@ -1341,9 +1341,9 @@ def _siqs(
         Y = prod_mod_n(pow(p, e // 2, n) for p, e in pf_prod.items() if p != -1)
         for d in (X - Y, X + Y):
             if 1 < (g := gcd(d, n)) < n:
-                return g # success, found non-trivial factor
+                return g  # success, found non-trivial factor
 
-    return 1 # failure, return trivial factor
+    return 1  # failure, return trivial factor
 
 def _build_factor_base(n: int, B: int) -> list[tuple[int, float, int]]:
     """
@@ -1352,7 +1352,7 @@ def _build_factor_base(n: int, B: int) -> list[tuple[int, float, int]]:
     """
     factor_base = [(2, log(2), 1)] if n % 2 != 0 and B >= 2 else []
     for p in primes(low=3, high=B):
-        if pow(n % p, (p - 1) // 2, p) != 1: continue # skip non-residues
+        if pow(n % p, (p - 1) // 2, p) != 1: continue  # skip non-residues
         if (root := _tonelli_shanks(n, p)) is not None:
             factor_base.append((p, log(p), root))
 
@@ -1376,14 +1376,14 @@ def _gen_polynomials(
     pool_primes = [p for p, _, _ in pool]
 
     # Choose k so target_A^(1/k) falls within prime range
-    k = ilog(target_A - 1, pool_primes[-1]) + 1 # ⌈log_{p_max}(target_A)⌉
+    k = ilog(target_A - 1, pool_primes[-1]) + 1  # ⌈log_{p_max}(target_A)⌉
     k = max(3, min(k, 8, len(pool)))
 
     # Narrow pool to primes near ideal size
     ideal = iroot(target_A, k)
     center = bisect.bisect_left(pool_primes, ideal)
-    half_width = min(max(200, len(pool) // 5), 1200) # heuristic window half-size
-    pool = pool[max(0, center - half_width) : center + half_width] or pool
+    half_width = min(max(200, len(pool) // 5), 1200)  # heuristic window half-size
+    pool = pool[max(0, center - half_width):center+half_width] or pool
 
     # Set acceptance bounds [low, high] for A
     if target_A > 10000:
@@ -1449,7 +1449,7 @@ def _sieve_polynomial(
         logp = itertools.repeat(log_p)
         for x in {((root - B) * inv_A) % p, ((-root - B) * inv_A) % p}:
             start = (x - offset) % p
-            sieve[start::p] = map(sub, sieve[start::p], logp) # subtract log(p)
+            sieve[start::p] = map(sub, sieve[start::p], logp)  # subtract log(p)
 
     # Yield only candidates that pass the smoothness threshold
     # (i.e. sieve value is small)
@@ -1490,14 +1490,14 @@ def _collect_relations(
         for Q, y in _sieve_polynomial(n, factor_base, A, Bp, M):
             # Factor Q over the factor base
             pf, residual = _partial_factorization(abs(Q), factor_base_primes)
-            pf[-1] = 1 if Q < 0 else 0 # account for sign with -1 factor
+            pf[-1] = 1 if Q < 0 else 0  # account for sign with -1 factor
 
             # Handle large prime variants
             large_primes = _get_large_primes(residual, possible_large_primes)
             if large_primes is None:
-                continue # unusable
+                continue  # unusable
             elif large_primes == ():
-                relations.setdefault(y % n, pf) # smooth
+                relations.setdefault(y % n, pf)  # smooth
             else:
                 # Check if gcd of large primes with n yields a non-trivial factor
                 large_prime_product = prod(large_primes)
@@ -1612,13 +1612,13 @@ def totient_range(N: int) -> list[int]:
     prime_factor_array = _prime_factor_range(N)
     for n in range(2, N):
         if (p := prime_factor_array[n]) == n:
-            phi[n] = n - 1 # n is prime
+            phi[n] = n - 1  # n is prime
         else:
             m = n // p
             if m % p == 0:
-                phi[n] = phi[m] * p # φ(p^k) = p * φ(p^(k-1))
+                phi[n] = phi[m] * p  # φ(p^k) = p * φ(p^(k-1))
             else:
-                phi[n] = phi[m] * (p - 1) # φ(p * m) = (p - 1) * φ(m) if p ∤ m
+                phi[n] = phi[m] * (p - 1)  # φ(p * m) = (p - 1) * φ(m) if p ∤ m
 
     return phi
 
@@ -1854,7 +1854,7 @@ def kronecker(a: int, n: int) -> int:
     """
     if n == 0:
         return 1 if (a == 1 or a == -1) else 0
-    
+
     # Calculate sign
     if n > 0:
         sign = 1
@@ -1870,8 +1870,8 @@ def kronecker(a: int, n: int) -> int:
         return 0
 
     # Compute (a | 2)^t
-    K = 1 if a % 8 in (1, 7) else -1 # (a | 2)
-    K = K if exp % 2 == 1 else 1 # (a | 2)^exp
+    K = 1 if a % 8 in (1, 7) else -1  # (a | 2)
+    K = K if exp % 2 == 1 else 1  # (a | 2)^exp
 
     return sign * K * jacobi(a % n, n)
 
@@ -2138,7 +2138,7 @@ def _crt_two_congruences(
 
     # Compute solution
     x = a1 + n1 * ((k * inv) % n2_)
-    mod = n1 * n2_ # n1 * n2 // d
+    mod = n1 * n2_  # n1 * n2 // d
     return x % mod, mod
 
 def _bach(
@@ -2194,9 +2194,9 @@ def _bach(
             g = a
         else:
             # Choose b with b^k != 1
-            b = secrets.randbelow(p - 3) + 2 # random in [2, p-2]
+            b = secrets.randbelow(p - 3) + 2  # random in [2, p-2]
             while pow(b, k, p) == 1:
-                b = secrets.randbelow(p - 3) + 2 # random in [2, p-2]
+                b = secrets.randbelow(p - 3) + 2  # random in [2, p-2]
 
             # Lift by multiplying a * b^k
             g = (a * pow(b, k, p)) % p
@@ -2244,7 +2244,7 @@ def discrete_log(a: int, b: int, mod: int) -> int | None:
         if b == normalization:
             return offset
         if b % g != 0:
-            return None # no solution exists
+            return None  # no solution exists
 
         b, mod, offset = b // g, mod // g, offset + 1
         if mod == 1:
@@ -2253,9 +2253,9 @@ def discrete_log(a: int, b: int, mod: int) -> int | None:
         a, normalization = a % mod, (normalization * (a // g)) % mod
 
     # Check early termination conditions
-    b = (b * pow(normalization, -1, mod)) % mod # normalize
+    b = (b * pow(normalization, -1, mod)) % mod  # normalize
     if b == 0:
-        return None # no solution exists for a^x = 0 mod m
+        return None  # no solution exists for a^x = 0 mod m
     if b == 1:
         return offset
 
@@ -2266,12 +2266,12 @@ def discrete_log(a: int, b: int, mod: int) -> int | None:
             x_i, ord_i = _discrete_log_mod_prime_power(a, b, p, e)
             congruences.append((x_i, ord_i))
         except ValueError:
-            return None # no solution exists
+            return None  # no solution exists
 
     # Combine solutions via Chinese Remainder Theorem
     residues, moduli = zip(*congruences)
     x = crt(residues, moduli)
-    return None if x is None else x + offset 
+    return None if x is None else x + offset
 
 def modular_roots(n: int, k: int, mod: int) -> tuple[int, ...]:
     """
@@ -2329,12 +2329,12 @@ def _discrete_log_mod_prime_power(a: int, b: int, p: int, e: int) -> tuple[int, 
         t_b = _pohlig_hellman_prime_power(5, -b % q if s_b == 1 else b, q, 2, e - 2)
 
         # Check 5^(t_b) in <5^(t_a)> to determine if a solution exists
-        ord_5 = 2**(e - 2) # size of <5> in (Z/qZ)×
-        g = gcd(t_a, ord_5) # index of <5^{t_a}> inside <5>
+        ord_5 = 2**(e - 2)  # size of <5> in (Z/qZ)×
+        g = gcd(t_a, ord_5)  # index of <5^{t_a}> inside <5>
         if t_b % g != 0:
-            raise ValueError("No solution exists") # 5^(t_b) not in <5^(t_a)>
+            raise ValueError("No solution exists")  # 5^(t_b) not in <5^(t_a)>
 
-        ord_a = ord_5 // g # size of the subgroup <5^{t_a}>
+        ord_a = ord_5 // g  # size of the subgroup <5^{t_a}>
 
         # Handle the degenerate a = ± 1 case (trivial 5-part)
         if ord_a == 1:
@@ -2355,7 +2355,7 @@ def _discrete_log_mod_prime_power(a: int, b: int, p: int, e: int) -> tuple[int, 
     # Solve a^x = b in the cyclic subgroup <a> ≤ (Z/qZ)×
     ord_a = _multiplicative_order_mod_odd_prime_power(a, p, e)
     if pow(b, ord_a, q) != 1:
-        raise ValueError("No solution exists") # b is not in <a>
+        raise ValueError("No solution exists")  # b is not in <a>
 
     return _pohlig_hellman(a, b, q, ord_a), ord_a
 
@@ -2381,7 +2381,7 @@ def _pohlig_hellman(g: int, h: int, mod: int, order: int) -> int:
     congruences = []
     for p, e in prime_factorization(order).items():
         q = p**e
-        g_i = pow(g, order // q, mod) # ord(g_i) = q in a cyclic group
+        g_i = pow(g, order // q, mod)  # ord(g_i) = q in a cyclic group
         h_i = pow(h, order // q, mod)
         x_i = _pohlig_hellman_prime_power(g_i, h_i, mod, p, e)
         congruences.append((x_i, q))
@@ -2407,11 +2407,11 @@ def _pohlig_hellman_prime_power(g: int, h: int, mod: int, p: int, e: int) -> int
     # Iteratively compute the p-adic digits of the logarithm
     x, prime_power, current_target, exponent = 0, 1, h, q
     for i in range(e):
-        exponent //= p # p^(e - 1 - i)
+        exponent //= p  # p^(e - 1 - i)
         projected_target = pow(current_target, exponent, mod)
         digit = discrete_log_solver(gamma, projected_target, mod, p)
         x += digit * prime_power
-        current_target *= pow(g, (-digit * prime_power) % q, mod) # h * g^(-x)
+        current_target *= pow(g, (-digit * prime_power) % q, mod)  # h * g^(-x)
         current_target %= mod
         prime_power *= p
 
@@ -2611,11 +2611,11 @@ def _tonelli_shanks(n: int, p: int) -> int | None:
         if i >= M:
             return None
 
-        b = pow(c, 2**(M-i-1), p) # root of unity of order 2^(i+1)
-        M = i # ord(t) = 2^M
-        c = (b*b) % p # root of unity of order 2^i
-        t = (t*c) % p # reduce order of t
-        R = (R*b) % p # update root candidate, maintains R^2 ≡ n * t (mod p)
+        b = pow(c, 2**(M-i-1), p)  # root of unity of order 2^(i+1)
+        M = i  # ord(t) = 2^M
+        c = (b*b) % p  # root of unity of order 2^i
+        t = (t*c) % p  # reduce order of t
+        R = (R*b) % p  # update root candidate, maintains R^2 ≡ n * t (mod p)
 
     return R
 
@@ -2656,10 +2656,10 @@ def _adleman_manders_miller(delta: int, r: int, p: int) -> int | None:
     rho = next(i for i in range(2, p) if pow(i, (p - 1) // r, p) != 1)
 
     # Initialize algorithm variables
-    a = pow(rho, r**(t - 1) * s, p) # generator of r-th roots of unity (order r)
-    b = pow(delta, r*alpha - 1, p) # satisfies b^(r^(t-1)) = 1
-    c = pow(rho, s, p) # root of unity of order dividing r^t
-    h = 1 # accumulates correction factor
+    a = pow(rho, r**(t - 1) * s, p)  # generator of r-th roots of unity (order r)
+    b = pow(delta, r*alpha - 1, p)  # satisfies b^(r^(t-1)) = 1
+    c = pow(rho, s, p)  # root of unity of order dividing r^t
+    h = 1  # accumulates correction factor
 
     # Iterative computation to calculate an r-th root
     # Maintain invariants b^(r^(t-1)) = 1 (mod p)
@@ -2967,7 +2967,7 @@ def pythagorean_triples(
         return
 
     # Unbounded case
-    queue = [] # (current_c, k, a0, b0, c0)
+    queue = []  # (current_c, k, a0, b0, c0)
     primitive_triples = _berggren()
     a0, b0, c0 = next(primitive_triples)
     while True:
@@ -3068,7 +3068,7 @@ def _euclid(max_m: int | None = None) -> Iterator[tuple[int, int, int]]:
 def _berggren() -> Iterator[tuple[int, int, int]]:
     """
     Generate primitive Pythagorean triples (a, b, c) with Berggren's tree method,
-    where a <= b <= c, and triples are generated in order of increasing c.    
+    where a <= b <= c, and triples are generated in order of increasing c.
     """
     triples = [(5, 3, 4)]
     while triples:
@@ -3106,8 +3106,8 @@ def pascal(num_rows: int | None = None) -> Iterator[tuple[tuple[int, int], int]]
     """
     row = [1]
     for n in itertools.count() if num_rows is None else range(num_rows):
-        yield from (((n, k), v) for k, v in enumerate(row)) # current row
-        row = [1, *map(int.__add__, row, row[1:]), 1] # next row
+        yield from (((n, k), v) for k, v in enumerate(row))  # current row
+        row = [1, *map(int.__add__, row, row[1:]), 1]  # next row
 
 def factorial_valuation(n: int, p: int) -> int:
     """
@@ -3207,7 +3207,7 @@ def count_partitions(n: int, restrict: Callable[[int], bool] | None = None) -> i
     if n < 0:
         raise ValueError("n must be a non-negative integer")
     if restrict:
-        return euler_transform(restrict)(n)    
+        return euler_transform(restrict)(n)
     else:
         return next(p for i, p in enumerate(partition_numbers()) if i == n)
 
@@ -3759,7 +3759,7 @@ def iroot(x: int, n: int = 2) -> int:
     if x == 0:
         return 0
     if n <= 0:
-        raise ValueError("n must be a positive integer") 
+        raise ValueError("n must be a positive integer")
     if n == 1:
         return x
     if n == 2:
@@ -3890,7 +3890,8 @@ def binary_search(
 def _threshold_select(
     value: int,
     thresholds: list[tuple[int, int]],
-    default: int) -> int:
+    default: int,
+) -> int:
     """
     Select result based on threshold ranges.
     Returns the result for the smallest (max_val, result) pair where value <= max_val.
@@ -3961,7 +3962,7 @@ def fibonacci_index(base: int, exp: int = 1) -> int:
     phi = (1 + sqrt(5)) / 2  # golden ratio
     log_phi = log(phi)
     log_sqrt5 = 0.5 * log(5.0)
-    log_target = exp * log(base) # log(base^exp) = exp * log(base)
+    log_target = exp * log(base)  # log(base^exp) = exp * log(base)
 
     # Find Fibonacci index
     i = max(1, int((log_target + log_sqrt5) / log_phi))
@@ -4071,7 +4072,7 @@ def digit_combinations(max_digits: int) -> Iterator[tuple[int, int]]:
     for d in range(1, max_digits + 1):
         for digits in itertools.combinations_with_replacement(string.digits, d):
             i = next((i for i, ch in enumerate(digits) if ch != '0'), None)
-            if i is None: continue # skip all-zero case
+            if i is None: continue  # skip all-zero case
             digit_counts = Counter(digits)
             count = factorials[d - 1] * (d - digit_counts['0'])
             count //= prod(map(factorials.__getitem__, digit_counts.values()))
@@ -4108,7 +4109,7 @@ def digit_permutations(n: int) -> Iterator[int]:
             yield sign * cur
             return
         for d in counts:
-            if counts[d] and (pos or d): # no leading zero
+            if counts[d] and (pos or d):  # no leading zero
                 counts[d] -= 1
                 yield from backtrack(pos + 1, cur * 10 + d)
                 counts[d] += 1
