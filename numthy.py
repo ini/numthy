@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Ini Oguntola
+# Copyright (c) 2026 Ini Oguntola
 # Permission is granted to use, copy, modify, and redistribute this work,
 # provided acknowledgement of the original author is retained.
 
