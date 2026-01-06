@@ -1,31 +1,81 @@
 # Copyright (c) 2026 Ini Oguntola
 # Permission is granted to use, copy, modify, and redistribute this work,
 # provided acknowledgement of the original author is retained.
+# Supports Python 3.10 or later.
 
 from __future__ import annotations
 
+import atexit
 import bisect
+import cmath
+import hashlib
+import hmac
 import itertools
+import multiprocessing
+import os
 import secrets
-import string
 import sys
 
 from collections import Counter, defaultdict, deque
 from collections.abc import Sequence
-from decimal import Decimal
 from fractions import Fraction
-from functools import lru_cache, reduce
+from functools import lru_cache, partial, reduce
 from heapq import heappop, heappush
 from math import factorial, gcd, inf, isqrt, lcm, log, prod, sqrt
-from operator import sub
-from typing import Any, Callable, Hashable, Iterable, Iterator
+from operator import mul, sub, xor
+from threading import Lock, Timer
+from typing import Any, Callable, Hashable, Iterable, Iterator, TypeAlias
 
 
 
-Number = int | float | complex | Decimal | Fraction
-NoSolutionError = type('NoSolutionError', (Exception,), {})
+########################################################################
+########################### Table of Contents ##########################
+########################################################################
+
+__all__ = [
+    'Number', 'Vector', 'Matrix',
+    # Primes
+    'is_prime', 'next_prime', 'random_prime', 'primes', 'count_primes', 'sum_primes',
+    # Factorization
+    'prime_factors', 'prime_factorization', 'divisors',
+    # Arithmetic Functions
+    'mobius', 'mobius_range', 'radical', 'radical_range',
+    'divisor_function', 'divisor_count_range', 'divisor_function_range',
+    'aliquot_sum_range', 'totient', 'totient_range', 'carmichael',
+    # Modular Arithmetic
+    'egcd', 'crt', 'hensel', 'multiplicative_order', 'primitive_root',
+    'legendre', 'jacobi', 'kronecker', 'dirichlet_character',
+    # Exponential Congruences
+    'discrete_log', 'modular_roots',
+    # Diophantine Equations
+    'bezout', 'cornacchia', 'pell', 'pythagorean_triples',
+    'periodic_continued_fraction', 'convergents',
+    # Combinatorics
+    'pascal', 'factorial_valuation', 'binomial_valuation',
+    'partition_numbers', 'count_partitions', 'euler_transform',
+    'sum_of_squares_count',
+    # Integer Sequences
+    'lucas', 'fibonacci', 'fibonacci_index', 'fibonacci_numbers',
+    'polygonal', 'polygonal_index', 'polygonal_numbers', 'is_polygonal',
+    # Linear Algebra
+    'linear_solve', 'nullspace', 'identity_matrix', 'matrix_apply', 'matrix_transpose',
+    'matrix_sum', 'matrix_difference', 'matrix_product',
+    # Utilities
+    'one', 'identity', 'nth', 'group_by_key', 'group_permutations',
+    'permutation', 'powerset', 'disjoint_subset_pairs', 'polynomial',
+    'iroot', 'ilog', 'is_square', 'non_squares', 'squares', 'cubes',
+    'perfect_power', 'binary_search', 'is_zero',
+    # Digits
+    'digit_sum', 'digit_count', 'digit_combinations', 'digit_permutations',
+]
+
+Number: TypeAlias = int | float | complex | Fraction
+Vector: TypeAlias = list[Number]
+Matrix: TypeAlias = list[list[Number]]
+singleton = lru_cache(maxsize=1)
 small_cache = lru_cache(maxsize=128)
 large_cache = lru_cache(maxsize=1048576)
+_NoSolutionError = type('_NoSolutionError', (Exception,), {})
 
 
 
@@ -50,13 +100,18 @@ def is_prime(n: int) -> bool:
     n : int
         Integer to test for primality
     """
-    if n < 2:
+    if (n & 1) == 0 or n < 3:  # n is even or n < 3
+        return n == 2
+
+    # Use primorial GCD equivalent to trial division
+    if n <= 59:
+        return n in {3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59}
+    if gcd(n, 961380175077106319535) > 1:  # GCD with 3 * 5 * ... * 59 (odd primes only)
         return False
 
-    # Trial division over first few primes
-    for p in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59):
-        if n % p == 0:
-            return n == p
+    # Check for Mersenne primes
+    if n.bit_length() == (k := n.bit_count()):  # n = 2^k - 1
+        return _lucas_lehmer(k)
 
     # Use deterministic set of Miller-Rabin bases for small n
     if n < 341531:
@@ -67,10 +122,14 @@ def is_prime(n: int) -> bool:
         bases = (4230279247111683200, 14694767155120705706, 16641139526367750375)
     elif n < 55245642489451:
         bases = (2, 141889084524735, 1199124725622454117, 11096072698276303650)
-    elif n < 18446744073709551616:  # 2^64
-        return _baillie_psw(n)
+    elif n < 18446744073709551616:
+        return _baillie_psw(n) # BPSW has no pseudoprimes < 2^64, speed ≈ 4-5 MR rounds
+    elif n < 318665857834031151167461:
+        bases = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37)
+    elif n < 3317044064679887385961981:
+        bases = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41)
     else:
-        bases = (secrets.randbelow(n - 3) + 2 for _ in range(64))
+        return _miller_rabin(n, 64)  # 64-MR rounds with random bases
 
     return _miller_rabin(n, bases)
 
@@ -109,6 +168,8 @@ def random_prime(num_bits: int, *, safe: bool = False) -> int:
         raise ValueError("Safe primes require num_bits >= 3")
     if not safe and num_bits < 2:
         raise ValueError("Primes require num_bits >= 2")
+    if not safe and num_bits == 2:
+        return secrets.randbelow(2) + 2
 
     # Generate candidates
     while True:
@@ -147,6 +208,15 @@ def primes(
     high = inf if high is None else high
     num = inf if num is None else num
 
+    # Initial list of small primes to use for the segmented sieve
+    small_primes = [
+        2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41,
+        43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97,
+    ]
+    if low == 2 and num <= 25 and high <= 100:
+        yield from (p for p in small_primes[:num] if p <= high)
+        return
+
     # Generate initial prime
     if low <= 2 <= high and num > 0:
         yield 2
@@ -164,12 +234,6 @@ def primes(
         n = num + 1.25506 * low / max(log(low), 1)  # Rosser & Schoenfeld bound (1962)
         upper_bound = n * (log(n) + log(log(n)))  # upper bound on the nth prime
         sieve_size = int(min(MAX_SIEVE_SIZE, high - low + 1, upper_bound - low))
-
-    # Initial list of small primes to use for the segmented sieve
-    small_primes = [
-        2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41,
-        43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97,
-    ]
 
     # Generate additional primes
     while low <= high and num > 0:
@@ -201,7 +265,14 @@ def count_primes(x: int) -> int:
     x : int
         Upper bound for prime numbers
     """
-    return _lmo(x, k=15, c=0.003)
+    if x < 10000:
+        return sum(1 for _ in primes(high=x))
+    elif x < 1_000_000:
+        return _lmo(x, k=5, c=0.015)
+    elif x < 1_000_000_000:
+        return _lmo(x, k=5, c=0.008)
+    else:
+        return _lmo(x, k=15, c=0.003)
 
 def sum_primes(
     x: int,
@@ -227,13 +298,25 @@ def sum_primes(
         Function to compute the cumulative sum Σ_{1 <= k <= n} f(k)
     """
     if f is None and f_prefix_sum is None:
-        f, f_prefix_sum = (lambda n: n), (lambda n: n * (n + 1) // 2)
+        if x < 10000:
+            return sum(primes(high=x))
+        else:
+            f, f_prefix_sum = identity, (lambda n: n * (n + 1) // 2)
     elif f is None or f_prefix_sum is None:
         raise ValueError("Both f() and f_prefix_sum() must be provided.")
 
-    return _lmo(x, k=5, c=0.005, f=f, f_prefix_sum=f_prefix_sum)
+    if x < 10000:
+        return sum(f(p) for p in primes(high=x))
+    elif x < 100000:
+        return _lmo(x, k=5, c=0.025, f=f, f_prefix_sum=f_prefix_sum)
+    elif x < 1_000_000:
+        return _lmo(x, k=5, c=0.015, f=f, f_prefix_sum=f_prefix_sum)
+    elif x < 10_000_000:
+        return _lmo(x, k=5, c=0.01, f=f, f_prefix_sum=f_prefix_sum)
+    else:
+        return _lmo(x, k=15, c=0.005, f=f, f_prefix_sum=f_prefix_sum)
 
-def _miller_rabin(n: int, bases: Iterable[int] = (2,)) -> bool:
+def _miller_rabin(n: int, bases: Iterable[int] | int = (2,)) -> bool:
     """
     Miller-Rabin primality test over the given bases.
 
@@ -241,31 +324,61 @@ def _miller_rabin(n: int, bases: Iterable[int] = (2,)) -> bool:
 
     Complexity
     ----------
-    O(k log³n) for k bases
+    O(k log³n) for k bases, with worst-case error probability 4⁻ᵏ
     """
-    # Write n - 1 as 2^s * d with d odd (by factoring out powers of 2)
-    s, d = 0, n - 1
-    while d % 2 == 0:
-        d //= 2
-        s += 1
+    # Write n - 1 as 2^s * d with d odd
+    d = n - 1
+    s = (d & -d).bit_length() - 1
+    d >>= s
 
-    # Perform a Miller-Rabin test for each base
+    # Multiprocessing for large inputs with many bases
+    if isinstance(bases, int) and bases >= 16 and n.bit_length() >= 80:
+        if (pool := _get_pool()) is not None:
+            # Small filter to catch composites quickly
+            if not _miller_rabin_rounds(n, s, d, (2,)):
+                return False
+
+            # Test bases in parallel
+            num_workers = min(8, multiprocessing.cpu_count(), bases)
+            bases_per_worker, remainder = divmod(bases, num_workers)
+            batches = [bases_per_worker + (i < remainder) for i in range(num_workers)]
+            worker = partial(_miller_rabin_rounds, n, s, d)
+            return all(pool.map(worker, batches))
+
+    # Otherwise, perform a Miller-Rabin test for each base sequentially
+    return _miller_rabin_rounds(n, s, d, bases)
+
+def _miller_rabin_rounds(n: int, s: int, d: int, bases: Iterable[int] | int) -> bool:
+    """
+    Miller-Rabin primality test for n over the given bases,
+    where n - 1 = 2^s * d with d odd.
+
+    See: https://www.sciencedirect.com/science/article/pii/0022314X80900840
+
+    Complexity
+    ----------
+    O(k log³n) time for k bases, with worst-case error probability 4⁻ᵏ
+    """
+    # Generate random bases, if specific bases have not been given
+    if isinstance(bases, int):
+        bases = (secrets.randbelow(n - 3) + 2 for _ in range(bases))
+    else:
+        bases = (a for base in bases if (a := base % n) != 0)
+
+    # Run a Miller-Rabin test for each base
     for a in bases:
-        if (a := a % n) == 0:
-            continue  # probable prime
-
         x = pow(a, d, n)
-        if x == 1 or x == n - 1:
+        if x == n - 1 or x == 1:
             continue  # probable prime
 
         for _ in range(s - 1):
-            x = (x * x) % n
+            x = pow(x, 2, n)
             if x == n - 1:
                 break  # probable prime
         else:
             return False  # composite
 
-    return True
+    return True  # All bases passed
 
 def _baillie_psw(n: int) -> bool:
     """
@@ -281,7 +394,7 @@ def _baillie_psw(n: int) -> bool:
     O(log³n) time
     """
     # Perform a Miller-Rabin test with base a = 2
-    if not _miller_rabin(n, bases=[2]):
+    if not _miller_rabin(n, bases=(2,)):
         return False
 
     # Reject perfect squares
@@ -293,27 +406,25 @@ def _baillie_psw(n: int) -> bool:
     while jacobi(D := P*P - 4, n) != -1:
         P += 1
 
-    # Write n + 1 = 2^s * d with d odd (by factoring out powers of 2)
-    s, d = 0, n + 1
-    while d % 2 == 0:
-        d //= 2
-        s += 1
-
-    # Division by 2 in Z/nZ for odd n
-    half = lambda a: (a + n) >> 1 if a & 1 else a >> 1
+    # Write n + 1 = 2^s * d with d odd
+    d = n + 1
+    s = (d & -d).bit_length() - 1
+    d >>= s
 
     # Perform an extra-strong Lucas primality test
-    U, V = 1, P
+    U, V = 1 % n, P % n
     for bit in format(d, 'b')[1:]:
         # Doubling step
         U, V = (U*V) % n, (V*V - 2) % n
 
-        # Incrementing step
+        # Incrementing step (with division by 2 in Z/nZ for odd n)
         if bit == '1':
-            U, V = half((P*U + V) % n), half((D*U + P*V) % n)
+            U, V = (P*U + V) % n, (D*U + P*V) % n
+            U = (U + n) >> 1 if U & 1 else U >> 1
+            V = (V + n) >> 1 if V & 1 else V >> 1
 
     # 1st extra-strong condition: U_d = 0 (mod n) and V = ± 2 (mod n)
-    if U == 0 and (V == 2 or V == n - 2):
+    if U == 0 and V in (2, n - 2):
         return True
 
     # 2nd extra-strong condition: V_{2^r * d} = 0 (mod n) for some 0 <= r < s - 1
@@ -321,7 +432,30 @@ def _baillie_psw(n: int) -> bool:
         if V == 0: return True
         V = (V*V - 2) % n
 
-    return V == 0
+    return s > 1 and V == 0
+
+def _lucas_lehmer(p: int) -> bool:
+    """
+    Run the Lucas-Lehmer test for Mersenne primes of the form M_p = 2^p - 1.
+
+    Complexity
+    ----------
+    O(p) multiplications
+    """
+    if p == 2:
+        return True
+
+    # Use trial division to determine if p is prime
+    for q in primes(high=isqrt(p)):
+        if p % q == 0:
+            return False
+
+    # Perform Lucas-Lehmer test
+    s, M = 4, (1 << p) - 1
+    for _ in range(p - 2):
+        s = (s*s - 2) % M
+
+    return s == 0
 
 def _segmented_eratosthenes(
     start: int,
@@ -421,14 +555,13 @@ def _lmo(
     # for integers 1 ... y by iterating over the primes in reverse order
     lpf, mu = [0] * (y + 1), [1] * (y + 1)
     for p in reversed(small_primes):
-        p_squared = p * p
-        mu[p_squared::p_squared] = [0] * ((y - p_squared) // p_squared + 1)
+        mu[p*p::p*p] = [0] * (y // (p*p))
         mu[p::p] = [-value for value in mu[p::p]]
-        lpf[p::p] = [p] * ((y - p) // p + 1)
+        lpf[p::p] = [p] * (y // p)
 
     # Sum the leaves in the tree created by either
-    # the standard recurrence φ(x, a) = φ(x, a-1) - φ(x/p_a, a-1)
-    # or the weighted recurrence φ_f(x, a) = φ_f(x, a-1) - f(p_a) * φ_f(x/p_a, a-1)
+    # the standard recurrence φ(x, a) = φ(x, a - 1) - φ(x/p_a, a - 1)
+    # or the weighted recurrence φ_f(x, a) = φ_f(x, a - 1) - f(p_a) * φ_f(x/p_a, a - 1)
     S1 = _lmo_s1(x, k, mu, small_primes, f, f_prefix_sum)  # sum over ordinary leaves
     S2 = _lmo_s2(x, k, lpf, mu, small_primes, f)  # sum over special leaves
 
@@ -520,13 +653,12 @@ def _lmo_s1(
     or the weighted recurrence φ_f(x, a) = φ_f(x, a-1) - f(p_a) * φ_f(x/p_a, a-1).
     """
     if f is None:
-        legendre_primes = small_primes[:k]
-        phi = lambda x, a: _phi_legendre(x, a, primes=legendre_primes)
+        phi = partial(_phi_prime_count, small_primes=small_primes[:k])
+    elif f == identity:
+        phi = partial(_phi_prime_sum, small_primes=small_primes[:k])
     else:
-        phi = lambda x, a: sum(
-            w * f_prefix_sum(x // t)
-            for t, w in _phi_legendre_weighted_coefficients(small_primes[:a], f)
-        )
+        phi = lambda x, a: f_prefix_sum(x) if a == 0 else (
+            phi(x, a - 1) - f(p := small_primes[a - 1]) * phi(x // p, a - 1))
 
     S1 = phi(x, k)
     a, y = len(small_primes), len(mu) - 1
@@ -558,6 +690,7 @@ def _lmo_s2(
     """
     S2 = 0
     a, y = len(small_primes), len(mu) - 1
+    if k >= a: return 0
     phi = [0] * a
     sieve_limit = x // y
     sieve_size = isqrt(sieve_limit) - 1
@@ -575,7 +708,7 @@ def _lmo_s2(
         if f is None:
             tree = _fenwick_tree_init(odd_sieve)
         else:
-            values = [f(low + 2*i) if odd_sieve[i] else 0 for i in range(tree_size)]
+            values = [f(low + 2*i) if s else 0 for i, s in enumerate(odd_sieve)]
             tree = _fenwick_tree_init(values)
 
         # Sieve the segment [low, high) with the remaining primes
@@ -662,16 +795,10 @@ def _fenwick_tree_query(tree: list[Number], index: int) -> Number:
 
     return total
 
-def _fenwick_tree_update(
-    tree: list[Number],
-    index: int,
-    value: Number,
-    tree_size: int | None = None,
-):
+def _fenwick_tree_update(tree: list[Number], index: int, value: Number, tree_size: int):
     """
     Update the given index in the tree.
     """
-    tree_size = tree_size or len(tree)
     for i in _fenwick_tree_update_path(index, tree_size):
         tree[i] += value
 
@@ -712,50 +839,68 @@ def _fenwick_tree_update_path(index: int, tree_size: int) -> tuple[int, ...]:
     return tuple(path)
 
 @large_cache
-def _phi_legendre(x: int, a: int, primes: tuple[int, ...]) -> int:
+def _phi_prime_count(x: int, a: int, small_primes: tuple[int, ...]) -> int:
     """
-    Evaluate Legendre's formula φ(x, a)
-    which counts the number of positive integers less than or equal to x
-    that are not divisible by any of the first a primes.
+    Evaluate Legendre's partial sieve function φ(x, a),
+    which counts the number of positive integers <= x coprime to the first a primes.
     """
     if a == 0:
         return x
     elif a < 8:
-        # Use the direct formula φ(x, a) = φ(d) * (x // d) + φ(x % d, a)
-        d = _primorial(a)
-        return totient(d) * (x // d) + _phi_legendre_offsets(d)[x % d]
+        # Use the direct formula φ(x, a) = (x/P) * φ(P) + φ(x % P, a)
+        q, r = divmod(x, P := _primorial(a))
+        return q * totient(P) + _phi_prime_count_offsets(P)[r]
     else:
-        # Use the recursive formula φ(x, a) = φ(x, a - 1) - φ(x // p, a - 1)
-        p = primes[a - 1]
-        return _phi_legendre(x, a - 1, primes) - _phi_legendre(x // p, a - 1, primes)
+        # Use the recursive formula φ(x, a) = φ(x, a - 1) - φ(x/p, a - 1)
+        p = small_primes[a - 1]
+        return (
+            _phi_prime_count(x, a - 1, small_primes)
+            - _phi_prime_count(x // p, a - 1, small_primes)
+        )
 
 @small_cache
-def _phi_legendre_offsets(d: int) -> tuple[int, ...]:
+def _phi_prime_count_offsets(d: int) -> tuple[int, ...]:
     """
-    Compute values for Legendre's formula φ(0, a), φ(1, a), ..., φ(d - 1, a)
-    where d is the product of the first a primes, and φ(d) is Euler's totient function.
+    Compute values for Legendre's partial sieve function φ(r, a) for r = 0, 1 ... d - 1,
+    where d is the product of the first a primes.
     """
     return tuple(itertools.accumulate(_coprime_range(d)))
 
+@large_cache
+def _phi_prime_sum(x: int, a: int, small_primes: tuple[int, ...]) -> int:
+    """
+    Evaluate Legendre's partial sieve function φ_f(x, a) for f(n) = n,
+    which gives the sum of positive integers <= x coprime to the first a primes.
+    """
+    if a == 0:
+        return x * (x + 1) // 2  # sum of all integers <= x
+    elif a == 1:
+        return ((x + 1) // 2)**2  # sum of odd integers <= x
+    elif a < 8:
+        # Use direct formula based on periodicity of coprimes mod P
+        q, r = divmod(x, P := _primorial(a))
+        count_coprimes, sum_coprimes = _phi_prime_sum_offsets(P)[r]
+        return P * q * (q * totient(P) // 2 + count_coprimes) + sum_coprimes
+    else:
+        # Use the recurrence φ_f(x, a) = φ_f(x, a - 1) - f(p_a) * φ_f(x/p_a, a - 1)
+        p = small_primes[a - 1]
+        return (
+            _phi_prime_sum(x, a - 1, small_primes)
+            - p * _phi_prime_sum(x // p, a - 1, small_primes)
+        )
+
 @small_cache
-def _phi_legendre_weighted_coefficients(
-    small_primes: tuple[int, ...],
-    f: Callable[[int], Number],
-) -> tuple[tuple[int, Number], ...]:
+def _phi_prime_sum_offsets(d: int) -> tuple[tuple[int, int], ...]:
     """
-    Precompute coefficients (t, μ(t)f(t)) for all t | d,
-    where d is a primorial, equal to the product of the given set of small primes.
-
-    Useful for calculating a weighted version of Legendre's formula
-    φ_f(x, a) = φ_f(x, a - 1) - f(p_a) * φ_f(x/p_a, a - 1) = Σ_{t|d} w_t * g(x/t)
-    via Mobius weighted inclusion-exclusion, where g is the prefix sum
-    g(x) = Σ_{n <= x} f(n).
+    Compute cumulative counts/sums for the weighted Legendre partial sieve function
+    with f(n) = n. Returns offsets[r] = (φ(r, a), φ_f(r, a)) for r = 0, 1 ... d - 1,
+    where d is the product of the first a primes, φ(r, a) counts and φ_f(r, a) sums
+    integers <= r coprime to the first a primes.
     """
-    coefficients = [(1, 1)]
-    for p, weight in zip(small_primes, map(f, small_primes)):
-        coefficients.extend((t * p, -c * weight) for (t, c) in coefficients[:])
-
-    return tuple(coefficients)
+    is_coprime = _coprime_range(d)
+    counts = itertools.accumulate(is_coprime)
+    sums = itertools.accumulate(map(mul, range(d), is_coprime))
+    return tuple(zip(counts, sums))
 
 @small_cache
 def _primorial(n: int) -> int:
@@ -834,20 +979,28 @@ def _gen_prime_factors(n: int) -> Iterator[int]:
     if n == 1:
         return
 
-    # Use probabilistic factorization algorithms (Las Vegas strategy)
-    # On failure, simply push n back onto the stack for further attempts
+    # Use a pipeline of Brent/ECM/SIQS factorization algorithms
     stack = deque([n])
     while stack:
         n = stack.pop()
         if is_prime(n):
             yield n
         elif n > 1:
-            # Use ECM or SIQS for large inputs
             num_bits = n.bit_length()
+
+            # Use full pipeline for large inputs
             if num_bits >= 64:
-                # Try ECM initially (good at finding small/medium size factors)
-                max_curves = 12 if num_bits >= 128 else None  # None -> use ECM default
-                d = _ecm(n, max_curves=max_curves)
+                # Run a capped version of Brent to catch small factors
+                max_attempts = 3 if num_bits <= 80 else 2
+                max_iterations = 1 << 20 if num_bits <= 80 else 1 << 16
+                d = _brent(n, max_attempts=max_attempts, max_iterations=max_iterations)
+                if 1 < d < n:
+                    stack.append(d)
+                    stack.append(n // d)
+                    continue
+
+                # Try ECM (good at finding small/medium size factors)
+                d = _ecm(n, max_curves=(12 if num_bits >= 128 else None))
                 if 1 < d < n:
                     stack.append(d)
                     stack.append(n // d)
@@ -865,9 +1018,35 @@ def _gen_prime_factors(n: int) -> Iterator[int]:
             stack.append(d)
             stack.append(n // d)
 
+def _count_distinct_prime_factors(n: int) -> int | None:
+    """
+    Count distinct prime factors of n.
+    Returns None if n has a squared prime factor.
+    """
+    if n == 1:
+        return 0
+    if is_prime(n):
+        return 1
+
+    # Use iterative factorization
+    stack, seen_prime_factors = deque([n]), set()
+    while stack:
+        n = stack.pop()
+        if is_prime(n):
+            if n in seen_prime_factors:
+                return None  # found squared factor
+            else:
+                seen_prime_factors.add(n)
+        elif n > 1:
+            d = _brent(n)
+            stack.append(d)
+            stack.append(n // d)
+
+    return len(seen_prime_factors)
+
 def _partial_factorization(
     n: int,
-    small_primes: Iterable[int]
+    small_primes: Iterable[int],
 ) -> tuple[dict[int, int], int]:
     """
     Factor n with respect to a set of primes.
@@ -876,61 +1055,124 @@ def _partial_factorization(
     """
     partial_pf = {}
     for p in small_primes:
-        while n % p == 0:
-            n //= p
-            partial_pf[p] = partial_pf.get(p, 0) + 1
+        if n % p: continue  # n not divisible by p
+        n, e = n // p, 1  # n divisible by p, exponent is at least 1
+        while True:
+            quotient, remainder = divmod(n, p)
+            if remainder: break  # n no longer divisible by p
+            n, e = quotient, e + 1
+
+        partial_pf[p] = e
+        if p*p > n: break  # only check termination when we've actually done division
+
+    if n in small_primes:
+        partial_pf[n] = n = 1
 
     return partial_pf, n
 
-def _brent(n: int, max_attempts: int = 8, batch_size: int = 256) -> int:
+def _brent(
+    n: int,
+    max_attempts: int | None = None,
+    max_iterations: int | None = None,
+    batch_size: int = 256,
+) -> int:
     """
     Brent's variant of Pollard's rho factorization method.
     Returns an integer factor of n.
+
+    When `max_attempts` is set to None, we are guaranteed to find a non-trivial factor.
 
     See: https://maths-people.anu.edu.au/~brent/pd/rpb051i.pdf
 
     Complexity
     ----------
-    O(√p) time, where p is smallest prime factor. O(n¹ᐟ⁴) time for semiprimes.
+    Expected Õ(√p) time, where p is smallest prime factor. Õ(n¹ᐟ⁴) time for semiprimes.
+    Deterministic O(√n) worst case.
     """
+    if (n & 1) == 0:
+        return 2
+    if n == 25:
+        return 5
+
+    # With starting point y = 2 and polynomial of the form f(x) = x^2 + c,
+    # for odd composite n != 25, there is an elementary proof that there exists some
+    # 0 < c < √n - 1 that finds a nontrivial factor on the very first GCD check
+    # Let x0 = 2, c = p - 2 with p | n and p <= √n, and consider gcd(n, f(f(x0)) - x0).
+    # The expected time remains the same, but this gives us a deterministic upper bound.
+    random_permutation, iteration_schedule = None, None
+    if max_attempts is None:
+        max_attempts = isqrt(n)
+        random_permutation = permutation(max_attempts)
+        iteration_schedule = _brent_iteration_schedule(n)
+
     for _ in range(max_attempts):
-        # Random starting point and polynomial f(x) = x^2 + c
-        y = secrets.randbelow(n - 3) + 2
-        c = secrets.randbelow(n - 3) + 2
-        G, r = 1, 1  # batch GCD, range
+        if random_permutation:
+            # Fixed starting point y = 2 and random polynomial f(x) = x^2 + c
+            y, c = 2, next(random_permutation) + 1
+        else:
+            # Random starting point and polynomial f(x) = x^2 + c
+            y, c = secrets.randbelow(n - 3) + 2, secrets.randbelow(n - 3) + 1
+
+        # Per-attempt iteration cap
+        max_iter = next(iteration_schedule) if iteration_schedule else max_iterations
 
         # Save checkpoint x, iterate y -> f(y) for r steps, then iterate r more steps
         # while also accumulating products q = prod (x - y) over the range.
         # When gcd(q, n) > 1, we've found a factor.
+        G, r, num_iterations = 1, 1, 0  # batch GCD, range, iteration count
         while G == 1:
             x, q = y, 1  # checkpoint, batch product
+            num_iterations += r
             for _ in range(r):
-                y = (y * y + c) % n
+                y = (y*y + c) % n
+            if max_iter is not None and num_iterations > max_iter:
+                break
 
             # Batch GCD
             for k in range(0, r, batch_size):
                 ys = y
-                for _ in range(min(batch_size, r - k)):
-                    y = (y * y + c) % n
+                limit = min(batch_size, r - k)
+                num_iterations += limit
+                for _ in range(limit):
+                    y = (y*y + c) % n
                     q = q * (x - y) % n
-
+                if max_iter is not None and num_iterations > max_iter:
+                    break
                 if (G := gcd(q, n)) > 1:
                     break
 
             # Double the range
             r *= 2
 
+        # Move on to next attempt when the maximum iteration has been reached
+        if G == 1:
+            continue
+
         # Backtrack if batch GCD failed (i.e. batch product is 0 mod n)
         if G == n:
             G, y = 1, ys
             while G == 1:
-                y = (y * y + c) % n
+                y = (y*y + c) % n
                 G = gcd(x - y, n)
 
-        if G < n:
+        if 1 < G < n:
             return G  # success, found non-trivial factor
 
     return 1  # failure, return trivial factor
+
+def _brent_iteration_schedule(n: int) -> Iterator[int]:
+    """
+    Per-attempt iteration caps for Brent's rho.
+    """
+    cap_min, cap_max = 2, max(2, 32 * isqrt(isqrt(n)))
+
+    # O(log n) heavy attempts with iteration limit of O(n^(1/4))
+    for _ in range(4 * n.bit_length()):
+        yield cap_max
+
+    # Remaining light attempts with constant limit (i.e. once through Brent inner loop)
+    while True:
+        yield cap_min
 
 def _ecm(
     n: int,
@@ -951,9 +1193,7 @@ def _ecm(
     ----------
     O(exp((√2 + o(1)) √(log p log log p))) time, where p is smallest prime factor
     """
-    if n < 2:
-        return 1
-    if n % 2 == 0:
+    if (n & 1) == 0:
         return 2
 
     # Heuristics tuned for 64–128-bit composites.
@@ -1069,9 +1309,10 @@ def _montgomery_ladder(
     if k == 1:
         return (P[0] % mod, P[1] % mod)
 
-    R0 = (1, 0)  # O (point at infinity)
-    R1 = diff = (P[0] % mod, P[1] % mod)
-    for bit in bin(k)[2:]:  # include leading 1
+    # Initialize with leading bit handled: R0 = P, R1 = 2P
+    R0 = diff = (P[0] % mod, P[1] % mod)
+    R1 = _montgomery_double(diff, A24, mod)
+    for bit in bin(k)[3:]:  # skip '0b' and leading 1
         if bit == '0':
             R1 = _montgomery_add(R0, R1, diff, mod)
             R0 = _montgomery_double(R0, A24, mod)
@@ -1161,12 +1402,12 @@ def _ecm_stage_2_plan(
         All unique offset values that need to be precomputed
     """
     if B2 <= B1:
-        return 0, {}, ()
+        return 0, {}, frozenset()
 
     # Choose giant step size D ≈ √B2, but ensure D/2 ≤ B1
     # This avoids k = 0 cases and huge baby-step sets
     giant_step_size = max(min(isqrt(B2), 2*B1), 6)
-    giant_step_size += giant_step_size % 2  # round up to even
+    giant_step_size += giant_step_size & 1  # round up to even
 
     # For each prime p in (B1, B2], represent as p = kD ± offset
     max_offset = giant_step_size // 2
@@ -1293,7 +1534,7 @@ def _siqs(
     n: int,
     B: int | None = None,
     M: int | None = None,
-    large_prime_multiplier: int | None = None,
+    large_prime_bound_multiplier: int | None = None,
     max_polynomial_count: int | None = None,
 ) -> int:
     """
@@ -1317,46 +1558,51 @@ def _siqs(
     # Use heuristic factor base bound B ≈ e^(1/2 sqrt(log(n) * log(log(n))))
     if B is None:
         log_bits = bits.bit_length()
+        B_thresholds = [(128, 30000), (144, 40000), (160, 50000)]
         B = 1 << (isqrt(bits * log_bits) >> 1)
-        B = max(300, min(B, 50000))
+        B = max(300, min(B, _threshold_select(bits, B_thresholds, 60000)))
 
-    # Adaptively set sieve half-width M based on input size and factor base bound
+    # Adaptively set sieve half-width M based on input size
     if M is None:
-        if bits <= 100: M = max(50000, B * 30)
-        elif bits <= 120: M = max(80000, B * 16)
-        elif bits <= 140: M = max(100000, B * 10)
-        else: M = max(120000, B * 8)
-        M = min(M, 400000)
+        M_thresholds = [
+            (100, 50000), (112, 60000), (128, 80000),
+            (140, 120000), (152, 140000), (160, 170000),
+        ]
+        M = _threshold_select(bits, M_thresholds, 220000)
 
-    # Adaptively set large prime multiplier based on input size
-    if large_prime_multiplier is None:
-        large_prime_multiplier = _threshold_select(bits, [(130, 8), (155, 16)], 20)
+    # Adaptively set large prime bound multiplier based on input size
+    if large_prime_bound_multiplier is None:
+        lpbm_thresholds = [(120, 8), (132, 10), (144, 12), (160, 14)]
+        large_prime_bound_multiplier = _threshold_select(bits, lpbm_thresholds, 16)
 
     # Adaptively set max number of polynomials to use based on input size
     if max_polynomial_count is None:
-        poly_thresholds = [(140, 2000), (155, 6000)]
-        max_polynomial_count = _threshold_select(bits, poly_thresholds, 9000)
+        poly_thresholds = [(112, 8000), (128, 12000), (144, 25000), (160, 40000)]
+        max_polynomial_count = _threshold_select(bits, poly_thresholds, 60000)
 
     # Collect relations (X, pf) where X^2 ≡ Q (mod n), Q is a B-smooth integer,
     # and pf[p] = e is the prime factorization of Q over the factor base
     factor_base = _build_factor_base(n, B)
     if not factor_base: return 1  # failure, no valid factor base
     min_relation_count = len(factor_base) + 30
-    L = B * large_prime_multiplier  # large prime bound
+    L = B * large_prime_bound_multiplier  # large prime bound
     relations, lucky_factor = _collect_relations(
         n, factor_base, B, L, M, min_relation_count, max_polynomial_count)
 
     # Check early termination conditions
     if lucky_factor is not None:
-        return lucky_factor  # success, gcd(lp, n) was non-trivial
-    if len(relations) <= len(factor_base):
+        return lucky_factor  # success, one of the large primes was a factor
+    if len(relations) < len(factor_base):
         return 1  # failure, null space will be trivial
 
     # Build a relation matrix over GF(2), where each row is a bit-packed integer
     # and each bit j is set only when prime j has odd exponent in that relation
     fb_primes, _, _ = zip(*factor_base)
     idx = {p: i for i, p in enumerate((-1,) + fb_primes)}  # prime index
-    rows = [sum(2**idx[p] for p, e in pf.items() if e % 2 == 1) for _, pf in relations]
+    rows = [
+        reduce(xor, (1 << idx[p] for p, e in pf.items() if e & 1), 0)
+        for _, pf in relations
+    ]
 
     # Find null space of the relation matrix over GF(2)
     # The product of the corresponding relations has exponents that are all even,
@@ -1385,8 +1631,10 @@ def _build_factor_base(n: int, B: int) -> list[tuple[int, float, int]]:
     factor_base = [(2, log(2), 1)] if n % 2 != 0 and B >= 2 else []
     for p in primes(low=3, high=B):
         if pow(n % p, (p - 1) // 2, p) != 1: continue  # skip non-residues
-        if (root := _tonelli_shanks(n, p)) is not None:
-            factor_base.append((p, log(p), root))
+        try:
+            factor_base.append((p, log(p), _tonelli_shanks(n, p)))
+        except _NoSolutionError:
+            continue
 
     return factor_base
 
@@ -1396,11 +1644,11 @@ def _gen_polynomials(
     M: int,
 ) -> Iterator[tuple[int, int]]:
     """
-    Generate SIQS polynomials Q(x) = (Ax + B)^2 - n,
-    where A ≈ √(2n)/M is the product of k primes and B satisfies B^2 ≡ n (mod A).
+    Generate SIQS polynomials Q(x) = (Ax + b)^2 - n,
+    where A ≈ √(2n)/M is the product of k primes and b satisfies b^2 ≡ n (mod A).
     """
     sqrt_n = isqrt(n)
-    target_A = isqrt(2*n) // M
+    target_A = max(isqrt(2*n) // M, 2)
 
     # Skip tiny primes (poor A factors, inflate duplicates)
     skip = max(10, len(factor_base) // 10)
@@ -1409,29 +1657,29 @@ def _gen_polynomials(
 
     # Choose k so target_A^(1/k) falls within prime range
     k = ilog(target_A - 1, pool_primes[-1]) + 1  # ⌈log_{p_max}(target_A)⌉
-    k = max(3, min(k, 8, len(pool)))
+    k = max(2, min(k, len(pool)))
 
     # Narrow pool to primes near ideal size
     ideal = iroot(target_A, k)
     center = bisect.bisect_left(pool_primes, ideal)
     half_width = min(max(200, len(pool) // 5), 1200)  # heuristic window half-size
     pool = pool[max(0, center - half_width):center+half_width] or pool
+    pool = pool if len(pool) >= k else factor_base
 
-    # Set acceptance bounds [low, high] for A
+    # Set acceptance bounds [low, high] for A (only if achievable)
+    low, high = 1, inf
     if target_A > 10000:
+        min_A = prod(p for p, _, _ in sorted(pool, key=lambda x: x[0])[:k])
         band = 25 if target_A >= 10**12 else 15
-        low, high = max(2, target_A // band), target_A * band
-    else:
-        low, high = 1, inf
+        if min_A <= target_A * band:
+            low, high = max(2, target_A // band), target_A * band
 
     # Generate polynomials
     rng, seen = secrets.SystemRandom(), set()
     while True:
         # Set A as the product of k randomly sampled primes from the pool
-        source = pool if len(pool) >= k else factor_base
-        sample = sorted(rng.sample(source, k), key=lambda x: x[0])
-        sample_primes, _, sample_roots = zip(*sample)
-        A = prod(sample_primes)
+        sample = sorted(rng.sample(pool, k), key=lambda x: x[0])
+        A = prod(p for p, _, _ in sample)
 
         # Reject duplicates and out-of-bounds A values
         if A < low or A > high or A in seen: continue
@@ -1439,15 +1687,39 @@ def _gen_polynomials(
         if len(seen) > 20000:
             seen.clear()
 
-        # For each prime p in A, we have two modular roots ±r (mod p)
-        # Try all sign combinations and use CRT to get B^2 ≡ n (mod A)
-        for signs in itertools.product((1, -1), repeat=k-1):
-            signs = (1,) + signs
-            residues = [s*r % p for s, r, p in zip(signs, sample_roots, sample_primes)]
-            B = crt(residues, sample_primes)
-            if B is not None:
-                # Shift B closer to √n for more efficient sieving (i.e. |Q(x)| small)
-                yield A, B + A * ((sqrt_n - B) // A)
+        # For each prime p | A, we have two modular roots (±r)^2 = n (mod p)
+        # Fix the 1st sign (no ± b duplicates) and set the others to get b^2 ≡ n (mod A)
+        # B_i ≡ r_i (mod p_i), B_i ≡ 0 (mod other primes) via CRT
+        # so sum(B_i) is the CRT solution for all residues r (mod p_i).
+        B = [(A // p) * ((root * pow(A // p, -1, p)) % p) for p, _, root in sample]
+
+        # Shift b-values closer to √n for more efficient sieving (i.e. |Q(x)| small)
+        shift = lambda b: b + A * ((sqrt_n - b) // A)
+
+        # Enumerate all 2^(k-1) sign combinations via Gray code
+        b = sum(B) % A  # base solution
+        yield A, shift(b)
+        for i in range(1, 1 << (k - 1)):
+            j = (i & -i).bit_length()
+            sign = 1 if ((i >> j) & 1) else -1
+            b = (b + 2 * sign * B[j]) % A  # flip sign of component j
+            yield A, shift(b)
+
+@lru_cache(maxsize=256)
+def _byte_subtraction_table(d: int) -> bytes:
+    """
+    Translation table for byte subtraction.
+    Maps byte v to max(0, v - d).
+    """
+    return bytes(max(0, v - d) for v in range(256))
+
+@lru_cache(maxsize=256)
+def _byte_threshold_table(threshold: int) -> bytes:
+    """
+    Translation table for threshold filtering.
+    Maps byte v to True if v <= threshold, otherwise to False.
+    """
+    return bytes(True if v <= threshold else False for v in range(256))
 
 def _sieve_polynomial(
     n: int,
@@ -1465,10 +1737,13 @@ def _sieve_polynomial(
     # Set smoothness threshold ~ max|Q(x)|
     max_abs_Q = max(abs((-A*M + B)**2 - n), abs((A*M + B)**2 - n))
     base_log = log(max_abs_Q) if max_abs_Q > 1 else 1.0
-    threshold = base_log * 0.55
+    threshold = 0.55 * base_log  # higher than usual to account for skipping p < 30
 
-    # Initialize sieve
-    sieve = [base_log] * length
+    # Initialize sieve as bytearray
+    # Scale logs to fit in a byte (0-255), where base_log -> 255 is the max byte
+    sieve = bytearray([255]) * length
+    scale = 255 / base_log
+    threshold = round(threshold * scale)
 
     # Sieve with factor base
     # Skip small primes (which will still be checked later when factoring Q(x))
@@ -1476,21 +1751,25 @@ def _sieve_polynomial(
         if A % p == 0 or p < 30:
             continue
 
+        # Translation table for subtracting log(p) at byte-scale
+        table = _byte_subtraction_table(round(log_p * scale))
+
         # Mark all x where Q(x) = 0 (mod p)
         inv_A = pow(A, -1, p)
-        logp = itertools.repeat(log_p)
-        for x in {((root - B) * inv_A) % p, ((-root - B) * inv_A) % p}:
-            start = (x - offset) % p
-            sieve[start::p] = map(sub, sieve[start::p], logp)  # subtract log(p)
+        x1, x2 = ((root - B) * inv_A) % p, ((-root - B) * inv_A) % p
+        start = (x1 - offset) % p
+        sieve[start::p] = sieve[start::p].translate(table)
+        if x2 != x1:
+            start = (x2 - offset) % p
+            sieve[start::p] = sieve[start::p].translate(table)
 
     # Yield only candidates that pass the smoothness threshold
-    # (i.e. sieve value is small)
-    for i, value in enumerate(sieve):
-        if value <= threshold:
-            y = A * (offset + i) + B
-            Q = y * y - n
-            if Q != 0:
-                yield Q, y
+    mask = sieve.translate(_byte_threshold_table(threshold))
+    for i in itertools.compress(range(length), mask):
+        y = A * (offset + i) + B
+        Q = y * y - n
+        if Q != 0:
+            yield Q, y
 
 def _collect_relations(
     n: int,
@@ -1513,11 +1792,16 @@ def _collect_relations(
         A non-trivial factor of n if found during collection, otherwise None
     """
     factor_base_primes, _, _ = zip(*factor_base)
-    possible_large_primes = list(primes(low=B+1, high=large_prime_bound))
+    possible_lp = list(primes(low=B+1, high=large_prime_bound))
 
     # Generate and sieve polynomials for relations
-    relations, partial_relations = {}, {}
+    relations, partials = {}, []  # partials is a list of (X, pf, large_primes) tuples
     polynomial_generator = _gen_polynomials(n, factor_base, M)
+
+    # Streaming GF(2) elimination on large-prime parity vectors.
+    # Each partial contributes a sparse column with bits at its large primes (mod 2).
+    # When a column reduces to 0, we've found a dependency whose large primes cancel.
+    lp_index, lp_pivots, lp_masks = {}, {}, {}
     for A, Bp in itertools.islice(polynomial_generator, max_polynomial_count):
         for Q, y in _sieve_polynomial(n, factor_base, A, Bp, M):
             # Factor Q over the factor base
@@ -1525,30 +1809,58 @@ def _collect_relations(
             pf[-1] = 1 if Q < 0 else 0  # account for sign with -1 factor
 
             # Handle large prime variants
-            large_primes = _get_large_primes(residual, possible_large_primes)
+            large_primes = _get_large_primes(residual, possible_lp)
             if large_primes is None:
                 continue  # unusable
-            elif large_primes == ():
+            elif not large_primes:
                 relations.setdefault(y % n, pf)  # smooth
             else:
-                # Check if gcd of large primes with n yields a non-trivial factor
-                large_prime_product = prod(large_primes)
-                if 1 < (g := gcd(large_prime_product, n)) < n:
+                # Check if any large primes are factors of n
+                if 1 < (g := gcd(prod(large_primes), n)) < n:
                     return [], g
+                elif g == n:
+                    return [], next(p for p in large_primes if n % p == 0)
 
-                # If we find two partials (X1)^2 = Q1 (mod n) and (X2)^2 = Q2 (mod n)
-                # with the same large primes with product d, then we can combine them
-                # and (X1 * X2 * d^(-1))^2 = (Q1/d) * (Q2/d) (mod n) is smooth
-                X1 = y % n
-                if large_primes in partial_relations:
-                    X2, partial_pf = partial_relations.pop(large_primes)
-                    for p, e in partial_pf.items():
-                        pf[p] = pf.get(p, 0) + e
+                # Add this partial and try to eliminate large primes (mod 2)
+                partials.append((y % n, pf, large_primes))
 
-                    X = (X1 * X2 * pow(large_prime_product, -1, n)) % n
-                    relations.setdefault(X, pf)
-                else:
-                    partial_relations[large_primes] = (X1, pf)
+                # Build parity vector (bitset) for the large-prime multiset
+                parity_vector = 0
+                for p in large_primes:
+                    parity_vector ^= 1 << lp_index.setdefault(p, len(lp_index))
+
+                # Gaussian elimination over GF(2) on the implicit matrix
+                # where each row is a partial (indexed by bit position in combo)
+                # and each column is a large prime (indexed by lp_index)
+                combo = 1 << (len(partials) - 1)
+                while parity_vector:
+                    lead = parity_vector.bit_length() - 1
+                    if lead not in lp_pivots:
+                        lp_pivots[lead], lp_masks[lead] = parity_vector, combo
+                        break
+                    parity_vector ^= lp_pivots[lead]
+                    combo ^= lp_masks[lead]
+
+                # If v = 0, combo encodes a subset of partials where all large primes
+                # occur an even number of times (i.e. their product is a square)
+                if parity_vector == 0:
+                    # Combine the dependency subset: large primes cancel to a square
+                    pf_combined, lp_counts, X_prod = {}, {}, 1
+                    while combo:
+                        X, pf, lps = partials[(combo & -combo).bit_length() - 1]
+                        X_prod = (X_prod * X) % n
+                        for p, e in pf.items():
+                            pf_combined[p] = pf_combined.get(p, 0) + e
+                        for p in lps:
+                            lp_counts[p] = lp_counts.get(p, 0) + 1
+                        combo &= combo - 1
+
+                    # D = sqrt of large-prime part = prod p^(count/2) (mod n)
+                    D = 1
+                    for p, count in lp_counts.items():
+                        D = D * pow(p, count >> 1, n) % n
+
+                    relations.setdefault((X_prod * pow(D, -1, n)) % n, pf_combined)
 
             if len(relations) >= min_relation_count:
                 return list(relations.items()), None
@@ -1558,19 +1870,22 @@ def _collect_relations(
 def _get_large_primes(
     v: int,
     possible_large_primes: Sequence[int],
-    max_large_prime_count: int = 2,
-) -> tuple | None:
+    max_count: int = 3,
+) -> tuple[int, ...] | None:
     """
     Factor residue v into large primes.
-    Returns tuple of up to `max_large_prime_count` primes if v factors completely
+    Returns tuple of up to `max_count` primes if v factors completely
     over `possible_large_primes`, otherwise returns None.
     """
+    if not possible_large_primes:
+        return None
+
     L = possible_large_primes[-1]
     if v == 1:
         return ()
     if v <= L:
         return (v,) if is_prime(v) else None
-    if max_large_prime_count <= 1:
+    if max_count <= 1:
         return None
 
     # Try to extract a large prime factor and recurse
@@ -1578,7 +1893,7 @@ def _get_large_primes(
         if p * p > v: break
         if v % p == 0:
             rest = _get_large_primes(
-                v // p, possible_large_primes, max_large_prime_count - 1)
+                v // p, possible_large_primes, max_count - 1)
             if rest is not None:
                 return tuple(sorted((p,) + rest))
 
@@ -1613,46 +1928,8 @@ def _nullspace_gf2(rows: list[int]) -> list[int]:
 
 
 ########################################################################
-####################### Multiplicative Functions #######################
+######################### Arithmetic Functions #########################
 ########################################################################
-
-def totient(n: int) -> int:
-    """
-    Compute Euler's totient function φ(n) for a positive integer n.
-
-    Parameters
-    ----------
-    n: int
-        Positive integer function argument
-    """
-    if n < 1:
-        raise ValueError("n must be a positive integer.")
-
-    return _totient_from_pf(prime_factorization(n))
-
-def totient_range(N: int) -> list[int]:
-    """
-    Find the value of Euler's totient function φ(n) for each n = 0, 1, 2, ..., N - 1.
-    Includes dummy value φ(0) = 1.
-
-    Parameters
-    ----------
-    N : int
-        Upper bound on range (exclusive)
-    """
-    phi = [1] * N
-    prime_factor_array = _prime_factor_range(N)
-    for n in range(2, N):
-        if (p := prime_factor_array[n]) == n:
-            phi[n] = n - 1  # n is prime
-        else:
-            m = n // p
-            if m % p == 0:
-                phi[n] = phi[m] * p  # φ(p^k) = p * φ(p^(k-1))
-            else:
-                phi[n] = phi[m] * (p - 1)  # φ(p * m) = (p - 1) * φ(m) if p ∤ m
-
-    return phi
 
 def mobius(n: int) -> int:
     """
@@ -1663,11 +1940,37 @@ def mobius(n: int) -> int:
     n: int
         Positive integer function argument
     """
-    pf = prime_factorization(n)
-    if any(v > 1 for v in pf.values()):
+    if n < 1:
+        raise ValueError("n must be a positive integer.")
+    if n == 1:
+        return 1
+    if is_prime(n):
+        return -1
+
+    # Trial division with small primes - check for squared factors immediately
+    num_factors = 0
+    for p in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53):
+        if n % p == 0:
+            num_factors += 1
+            n //= p
+            if n % p == 0:  # squared factor
+                return 0
+
+    if n == 1:
+        return 1 if num_factors % 2 == 0 else -1
+
+    # Fast perfect square check
+    sqrt_n = isqrt(n)
+    if sqrt_n * sqrt_n == n:
         return 0
 
-    return 1 if len(pf) % 2 == 0 else -1
+    # Factor remaining
+    num_remaining_factors = _count_distinct_prime_factors(n)
+    if num_remaining_factors is None:
+        return 0
+
+    num_factors += num_remaining_factors
+    return 1 if num_factors % 2 == 0 else -1
 
 def mobius_range(N: int) -> list[int]:
     """
@@ -1680,11 +1983,11 @@ def mobius_range(N: int) -> list[int]:
         Upper bound on range (exclusive)
     """
     mu = [1] * N
-    prime_factor_array = _prime_factor_range(N)
+    prime_divisor = _prime_factor_range(N)
     for n in range(2, N):
-        p = prime_factor_array[n]
+        p = prime_divisor[n]
         m = n // p
-        if prime_factor_array[m] == p:
+        if prime_divisor[m] == p:
             mu[n] = 0
         else:
             mu[n] = -mu[m]
@@ -1716,11 +2019,11 @@ def radical_range(N: int) -> list[int]:
         Upper bound on range (exclusive)
     """
     rad = [1] * N
-    prime_factor_array = _prime_factor_range(N)
+    prime_divisor = _prime_factor_range(N)
     for n in range(2, N):
-        p = prime_factor_array[n]
+        p = prime_divisor[n]
         m = n // p
-        if prime_factor_array[m] == p:
+        if prime_divisor[m] == p:
             rad[n] = rad[m]
         else:
             rad[n] = rad[m] * p
@@ -1761,14 +2064,14 @@ def divisor_count_range(N: int) -> list[int]:
         Upper bound on range (exclusive)
     """
     # Use the multiplicative property of the divisor count function
-    # exp[n] = exponent of prime_factor_array[n] in n
+    # exp[n] = exponent of prime_divisor[n] in n
     divisor_counts = [1] * N
     exp = [0] * N
-    prime_factor_array = list(_prime_factor_range(N))
+    prime_divisor = list(_prime_factor_range(N))
     for n in range(2, N):
-        p = prime_factor_array[n]
+        p = prime_divisor[n]
         m = n // p
-        if prime_factor_array[m] == p:
+        if prime_divisor[m] == p:
             e = exp[m] + 1
             exp[n], divisor_counts[n] = e, (divisor_counts[m] // e) * (e + 1)
         else:
@@ -1793,15 +2096,15 @@ def divisor_function_range(N: int, k: int = 1) -> list[int]:
 
     # Use the multiplicative property of the divisor sum function
     # power[n] = p^(ke) for the largest prime power p^e | n,
-    # where p = prime_factor_array[n]
+    # where p = prime_divisor[n]
     # sum_of_powers[n] = 1 + p^k + p^(2k) + ... + p^(ke)
     divisor_sums = [1] * N
     power, sum_of_powers = [0] * N, [0] * N
-    prime_factor_array = _prime_factor_range(N)
+    prime_divisor = _prime_factor_range(N)
     for n in range(2, N):
-        p = prime_factor_array[n]
+        p = prime_divisor[n]
         m = n // p
-        if prime_factor_array[m] == p:
+        if prime_divisor[m] == p:
             power[n] = power[m] * p**k
             sum_of_powers[n] = sum_of_powers[m] + power[n]
             divisor_sums[n] = divisor_sums[m] // sum_of_powers[m] * sum_of_powers[n]
@@ -1827,102 +2130,80 @@ def aliquot_sum_range(N: int) -> list[int]:
     divisor_sums = divisor_function_range(N)
     return [d - i for i, d in enumerate(divisor_sums)]
 
-def legendre(a: int, p: int) -> int:
+def totient(n: int) -> int:
     """
-    Compute the Legendre symbol (a | p), where p is an odd prime.
+    Compute Euler's totient function φ(n) for a positive integer n.
 
     Parameters
     ----------
-    a: int
-        Numerator (i.e. quadratic residue class)
-    p: int
-        Denominator (i.e. prime modulus)
-    """
-    if p == 2 or not is_prime(p):
-        raise ValueError("p must be an odd prime")
-
-    L = pow(a % p, (p - 1) // 2, p)
-    return -1 if L == p - 1 else L
-
-def jacobi(a: int, n: int) -> int:
-    """
-    Compute the Jacobi symbol (a | n), where n is an odd positive integer.
-
-    Parameters
-    ----------
-    a: int
-        Numerator (i.e. quadratic residue class)
     n: int
-        Denominator (i.e. modulus)
+        Positive integer function argument
     """
-    if n <= 0 or n % 2 == 0:
-        raise ValueError("n must be an odd positive integer.")
+    if n < 1:
+        raise ValueError("n must be a positive integer.")
 
-    J = 1
-    while (a := a % n) != 0:
-        # Extract factors of 2 from a
-        while a % 2 == 0:
-            a //= 2
-            if n % 8 in (3, 5):
-                J = -J
+    phi = n
+    for p in set(_gen_prime_factors(n)):
+        phi -= phi // p
 
-        # Apply quadratic reciprocity
-        a, n = n, a
-        if a % 4 == 3 and n % 4 == 3:
-            J = -J
+    return phi
 
-    return J if n == 1 else 0
-
-def kronecker(a: int, n: int) -> int:
+def totient_range(N: int) -> list[int]:
     """
-    Compute the Kronecker symbol (a | n).
+    Find the value of Euler's totient function φ(n) for each n = 0, 1, 2, ..., N - 1.
+    Includes dummy value φ(0) = 1.
 
     Parameters
     ----------
-    a: int
-        Numerator (i.e. quadratic residue class)
+    N : int
+        Upper bound on range (exclusive)
+    """
+    phi = [1] * N
+    prime_divisor = _prime_factor_range(N)
+    for n in range(2, N):
+        if (p := prime_divisor[n]) == n:
+            phi[n] = n - 1  # n is prime
+        else:
+            m = n // p
+            if m % p == 0:
+                phi[n] = phi[m] * p  # φ(p^k) = p * φ(p^(k-1))
+            else:
+                phi[n] = phi[m] * (p - 1)  # φ(p * m) = (p - 1) * φ(m) if p ∤ m
+
+    return phi
+
+def carmichael(n: int) -> int:
+    """
+    Compute Carmichael's lambda function λ(n) for a positive integer n.
+
+    Parameters
+    ----------
     n: int
-        Denominator (i.e. modulus)
+        Positive integer function argument
     """
-    if n == 0:
-        return 1 if (a == 1 or a == -1) else 0
+    if n < 1:
+        raise ValueError("n must be a positive integer.")
 
-    # Calculate sign
-    if n > 0:
-        sign = 1
-    else:
-        sign, n = (-1 if a < 0 else 1), -n
+    terms = []
+    for p, e in prime_factorization(n).items():
+        if p == 2:
+            terms.append(e if e < 3 else 2**(e - 2))
+        else:
+            terms.append((p - 1) * (p**(e - 1)))
 
-    # Factor out powers of 2
-    exp = (n & -n).bit_length() - 1
-    n >>= exp
-
-    # If both a and n are even, (a | n) = 0
-    if a % 2 == 0 and exp > 0:
-        return 0
-
-    # Compute (a | 2)^t
-    K = 1 if a % 8 in (1, 7) else -1  # (a | 2)
-    K = K if exp % 2 == 1 else 1  # (a | 2)^exp
-
-    return sign * K * jacobi(a % n, n)
-
-def _totient_from_pf(pf: dict[int, int]) -> int:
-    """
-    Compute Euler's totient function φ(n) given the prime factorization of n.
-    """
-    return prod(p**(e - 1) * (p - 1) for p, e in pf.items())
+    return lcm(*terms)
 
 def _prime_factor_range(N: int) -> list[int]:
     """
     Find a prime factor for each n = 0, 1, 2, ..., N - 1.
+    Returns any prime factor for each n (not necessarily the smallest).
     """
-    prime_factor_array = list(range(N))
+    prime_divisor = list(range(N))
     if N >= 1:
         for p in primes(high=isqrt(N-1)):
-            prime_factor_array[p::p] = [p] * ((N - 1 - p) // p + 1)
+            prime_divisor[p::p] = [p] * ((N - 1 - p) // p + 1)
 
-    return prime_factor_array
+    return prime_divisor
 
 def _coprime_range(N: int) -> bytearray:
     """
@@ -2001,7 +2282,7 @@ def crt(residues: Iterable[int], moduli: Iterable[int]) -> int | None:
     """
     try:
         return reduce(_crt_two_congruences, zip(residues, moduli), (0, 1))[0]
-    except NoSolutionError:
+    except _NoSolutionError:
         return None
 
 def hensel(
@@ -2072,22 +2353,6 @@ def hensel(
 
     return tuple(root % mod for root in solutions)
 
-def carmichael(n: int) -> int:
-    """
-    Compute Carmichael's lambda function λ(n) for a positive integer n.
-    """
-    if n < 1:
-        raise ValueError("n must be a positive integer.")
-
-    terms = []
-    for p, e in prime_factorization(n).items():
-        if p == 2:
-            terms.append(e if e < 3 else 2**(e - 2))
-        else:
-            terms.append((p - 1) * (p**(e - 1)))
-
-    return lcm(*terms)
-
 def multiplicative_order(a: int, mod: int) -> int:
     """
     Return the smallest integer k = ord_n(a) such that a^k ≡ 1 (mod n).
@@ -2118,7 +2383,7 @@ def primitive_root(n: int) -> int | None:
     """
     Find a primitive root modulo n.
 
-    Use the Itoh-Bach algorithm to search for candidates.
+    Use Bach's primitive root finding algorithm to search for candidates.
 
     Parameters
     ----------
@@ -2134,7 +2399,7 @@ def primitive_root(n: int) -> int | None:
 
     # Check if a primitive root exists
     pf = prime_factorization(n)
-    if not ((len(pf) == 1 and n % 2 == 1) or (len(pf) == 2 and pf.get(2, 0) == 1)):
+    if not ((len(pf) == 1 and (n & 1) == 1) or (len(pf) == 2 and pf.get(2, 0) == 1)):
         return None
 
     # Find a primitive root mod p
@@ -2148,10 +2413,131 @@ def primitive_root(n: int) -> int | None:
 
     # Force g to be odd
     # Any odd root mod p^e is a root mod 2p^e
-    if n % 2 == 0:
-        return g if g % 2 == 1 else g + n // 2
+    if (n & 1) == 0:
+        return g if (g & 1) == 1 else g + n // 2
     else:
         return g
+
+def legendre(a: int, p: int) -> int:
+    """
+    Compute the Legendre symbol (a | p), where p is an odd prime.
+
+    Parameters
+    ----------
+    a: int
+        Numerator (i.e. quadratic residue class)
+    p: int
+        Denominator (i.e. prime modulus)
+    """
+    if p == 2 or not is_prime(p):
+        raise ValueError("p must be an odd prime")
+
+    L = pow(a % p, (p - 1) // 2, p)
+    return -1 if L == p - 1 else L
+
+def jacobi(a: int, n: int) -> int:
+    """
+    Compute the Jacobi symbol (a | n), where n is an odd positive integer.
+
+    Parameters
+    ----------
+    a: int
+        Numerator (i.e. quadratic residue class)
+    n: int
+        Denominator (i.e. modulus)
+
+    Complexity
+    ----------
+    O(log a log n) time
+    """
+    if n <= 0 or not n & 1:
+        raise ValueError("n must be an odd positive integer.")
+
+    J = 1
+    while (a := a % n) != 0:
+        # Extract factors of 2 from a
+        if (a & 1) == 0:
+            s = (a & -a).bit_length() - 1
+            a >>= s
+            if (s & 1) == 1 and n & 7 in (3, 5):  # s is odd and n = ± 3 (mod 8)
+                J = -J
+
+        # Apply quadratic reciprocity
+        a, n = n, a
+        if a & n & 2:  # a (mod 4) = 3 = n (mod 4)
+            J = -J
+
+    return J if n == 1 else 0
+
+def kronecker(a: int, n: int) -> int:
+    """
+    Compute the Kronecker symbol (a | n).
+
+    Parameters
+    ----------
+    a: int
+        Numerator (i.e. quadratic residue class)
+    n: int
+        Denominator (i.e. modulus)
+    """
+    if n == 0:
+        return 1 if (a == 1 or a == -1) else 0
+
+    # Calculate sign
+    if n > 0:
+        sign = 1
+    else:
+        sign, n = (-1 if a < 0 else 1), -n
+
+    # Factor out powers of 2
+    exp = (n & -n).bit_length() - 1
+    n >>= exp
+
+    # If both a and n are even, (a | n) = 0
+    if (a & 1) == 0 and exp:
+        return 0
+
+    # Compute (a | 2)^exp
+    K = 1 if (a & 7) in (1, 7) else -1 # check whether a = ± 1 (mod 8)
+    if (exp & 1) == 0: K = 1 # check whether exp is even
+
+    return sign * K * jacobi(a % n, n)
+
+def dirichlet_character(m: int, k: int) -> Callable[[int], Number]:
+    """
+    Return the Dirichlet character χₘ‚ₖ : ℤ → ℂ under Conrey labeling,
+    where m is the modulus and k is an index such that gcd(m, k) = 1.
+
+    Parameters
+    ----------
+    m : int
+        Modulus of the character
+    k : int
+        Index of the character
+
+    Returns
+    -------
+    chi : Callable(int) -> Number
+        Dirichlet character χₘ‚ₖ(n) as a callable function
+        returning the character value at n
+    
+    See: https://www.lmfdb.org/knowledge/show/character.dirichlet.conrey
+    """
+    if m == 1:
+        return lambda n: 1  # trivial character
+    if m < 1:
+        raise ValueError("Modulus must be positive")
+    if gcd(m, k) != 1:
+        raise ValueError("Must have gcd(m, k) = 1")
+
+    k %= m
+    pf = prime_factorization(m)
+    characters = [_dirichlet_character_prime_power(p, e, k) for p, e in pf.items()]
+    if len(characters) == 1:
+        p, chi = next(iter(pf.keys())), characters[0]
+        return lambda n: 0 if n % p == 0 else chi(n)
+    else:
+        return lambda n: 0 if gcd(m, n) > 1 else prod(chi(n) for chi in characters)
 
 def _crt_two_congruences(
     congruence_1: tuple[int, int],
@@ -2170,7 +2556,7 @@ def _crt_two_congruences(
     d = gcd(n1, n2)
     diff = a2 - a1
     if diff % d != 0:
-        raise NoSolutionError("No solution exists for the given system of congruences.")
+        raise _NoSolutionError("No solution exists for the given pair of congruences.")
 
     # Reduce to coprime moduli and compute modular inverse
     n1_, n2_ = n1 // d, n2 // d
@@ -2190,8 +2576,8 @@ def _bach(
     max_tries: int = 64,
 ) -> int:
     """
-    Use the Itoh/Bach algorithm to search for a primitive root modulo p,
-    where p is prime.
+    Use Bach's primitive root finding algorithm to search for
+    a primitive root modulo p, where p is prime.
 
     See: https://www.jstor.org/stable/2153696
 
@@ -2204,8 +2590,6 @@ def _bach(
         return 1
     if p == 3:
         return 2
-    if not is_prime(p):
-        raise ValueError("p must be prime")
     if not 0.0 < eps < 1.0:
         raise ValueError("must have 0 < eps < 1")
 
@@ -2253,6 +2637,77 @@ def _bach(
 
     raise RuntimeError(
         "Failed to find a verified primitive root; try increasing B or max_tries.")
+
+@small_cache
+def _dirichlet_character_prime_power(p: int, e: int, k: int) -> Callable[[int], Number]:
+    """
+    Return the Dirichlet character χₘ‚ₖ : ℤ → ℂ under Conrey labeling,
+    where m = p^e is a prime-power modulus and k is an index such that gcd(m, k) = 1.
+    Assumes gcd(p, k) = 1.
+    """
+    exp, pi = cmath.exp, cmath.pi
+    dlog = _dirichlet_log_cache
+    k %= (q := p**e)
+    if p == 2 and e < 3:
+        chi = lambda n: 1 if k == 1 or n % 4 == 1 else -1
+    elif p == 2:
+        # When q = 2^e > 4, (Z/qZ)× = C_2 × C_{2^{e-2}} = <-1> × <5>
+        # Decompose k = ε_a * 5^a (mod q) where ε_a = ±1
+        sign_a = -1 if k % 4 == 3 else 1
+        a = dlog(5, sign_a * k, q)
+
+        # Decompose n = ε_b * 5^b (mod q)
+        # Character is χ(n) = exp(2πi * ((1-ε_a)(1-ε_b)/8 + ab/2^{e-2}))
+        order = 2**(e - 2)
+        def chi(n: int) -> Number:
+            sign_b = -1 if n % 4 == 3 else 1
+            b = dlog(5, sign_b * n, q)
+            t = (a * b) % order
+            return exp(2j * pi * ((1 - sign_a)*(1 - sign_b)/8 + t/order))
+    else:
+        # When q = p^e is an odd prime power, (Z/qZ)× is cyclic
+        # Find smallest primitive root g mod p^2 (i.e. the Conrey generator)
+        # We have g < 2p, and g will be a primitive root mod p^e for all e > 0
+        p2, phi = p * p, p * (p - 1)
+        primes = set(_gen_prime_factors(phi))
+        is_primitive_root = lambda g: all(pow(g, phi // r, p2) != 1 for r in primes)
+        g = next(i for i in range(2, 2*p) if is_primitive_root(i))
+
+        # Exact values for 1st, 2nd, and 4th roots of unity
+        exact = {0: 1}
+        order = (p - 1) * p**(e - 1)
+        if order % 2 == 0: exact[order // 2] = -1
+        if order % 4 == 0: exact[order // 4], exact[3 * order // 4] = 1j, -1j
+
+        # Character is χ(n) = exp(2πi*ab/φ(q)), where g^a = k and g^b = n
+        a = dlog(g, k, q)
+        def chi(n: int) -> Number:
+            t = (a * dlog(g, n, q)) % order
+            return exact.get(t) or exp(2j * pi * t / order)
+
+    return chi
+
+@small_cache
+def _dirichlet_log_table(a: int, mod: int) -> dict[int, int]:
+    """
+    Build a log-table of table[x] = b such that a^x = b (mod m).
+    """
+    b, exp, powers = a, 1, {1: 0, a: 1}
+    while (b := (b * a) % mod) != 1:
+        powers[b] = (exp := exp + 1)
+
+    return powers
+
+@large_cache
+def _dirichlet_log_cache(a: int, b: int, mod) -> int | None:
+    """
+    Shared cache for discrete-logs.
+    """
+    a, b = a % mod, b % mod
+    if mod < 10000:
+        return _dirichlet_log_table(a, mod).get(b, None)
+    else:
+        return discrete_log(a, b, mod)
 
 
 
@@ -2311,7 +2766,7 @@ def discrete_log(a: int, b: int, mod: int) -> int | None:
         try:
             x_i, ord_i = _discrete_log_mod_prime_power(a, b, p, e)
             congruences.append((x_i, ord_i))
-        except NoSolutionError:
+        except _NoSolutionError:
             return None  # no solution exists
 
     # Combine solutions via Chinese Remainder Theorem
@@ -2346,7 +2801,10 @@ def modular_roots(n: int, k: int, mod: int) -> tuple[int, ...]:
     moduli = []
     for p, e in prime_factorization(m).items():
         roots_mod_prime = _modular_roots_mod_prime(n, k, p)
-        roots_mod_prime_power = hensel(coefficients, p, e, initial=roots_mod_prime)
+        if e > 1:
+            roots_mod_prime_power = hensel(coefficients, p, e, initial=roots_mod_prime)
+        else:
+            roots_mod_prime_power = roots_mod_prime
         if not roots_mod_prime_power:
             return ()
         residue_sets.append(tuple(roots_mod_prime_power))
@@ -2378,14 +2836,14 @@ def _discrete_log_mod_prime_power(a: int, b: int, p: int, e: int) -> tuple[int, 
         ord_5 = 2**(e - 2)  # size of <5> in (Z/qZ)×
         g = gcd(t_a, ord_5)  # index of <5^{t_a}> inside <5>
         if t_b % g != 0:
-            raise NoSolutionError("No solution exists")  # 5^(t_b) not in <5^(t_a)>
+            raise _NoSolutionError("No solution exists")  # 5^(t_b) not in <5^(t_a)>
 
         ord_a = ord_5 // g  # size of the subgroup <5^{t_a}>
 
         # Handle the degenerate a = ± 1 case (trivial 5-part)
         if ord_a == 1:
             if s_a == 0 and s_b != 0:
-                raise NoSolutionError("No solution exists")
+                raise _NoSolutionError("No solution exists")
             return (0, 1) if s_a == 0 else (s_b, 2)
 
         # Solve (t_a/g) * x ≡ (t_b/g) (mod ord_a) in <5>
@@ -2394,14 +2852,14 @@ def _discrete_log_mod_prime_power(a: int, b: int, p: int, e: int) -> tuple[int, 
 
         # Enforce sign parity constraint (-1)^{s_a*x} = (-1)^{s_b}
         if (s_a == 0 and s_b != 0) or (s_a == 1 and (x % 2) != s_b):
-            raise NoSolutionError("No solution exists")
+            raise _NoSolutionError("No solution exists")
 
         return x, ord_a
 
     # Solve a^x = b in the cyclic subgroup <a> ≤ (Z/qZ)×
     ord_a = _multiplicative_order_mod_odd_prime_power(a, p, e)
     if pow(b, ord_a, q) != 1:
-        raise NoSolutionError("No solution exists")  # b is not in <a>
+        raise _NoSolutionError("No solution exists")  # b is not in <a>
 
     return _pohlig_hellman(a, b, q, ord_a), ord_a
 
@@ -2418,14 +2876,14 @@ def _pohlig_hellman(g: int, h: int, mod: int, order: int) -> int:
 
     # Validate that g and h lie in the claimed subgroup
     if pow(g, order, mod) != 1 or pow(h, order, mod) != 1:
-        raise NoSolutionError("No solution exists")
+        raise _NoSolutionError("No solution exists")
 
     # Handle special case of trivial subgroup
     if order == 1:
         if h == 1 % mod:
             return 0
         else:
-            raise NoSolutionError("No solution exists")
+            raise _NoSolutionError("No solution exists")
 
     # Solve g^x = h in each Sylow subgroup of <g> with order p^e
     congruences = []
@@ -2444,10 +2902,14 @@ def _pohlig_hellman_prime_power(g: int, h: int, mod: int, p: int, e: int) -> int
     """
     Pohlig-Hellman algorithm for discrete logarithms.
     Solves the discrete logarithm g^x = h in cyclic subgroup <g> of order p^e.
+
+    Complexity
+    ----------
+    O(e² log p + e√p) multiplications
     """
-    q = p**e
-    g, h = g % mod, h % mod
+    # Use BSGS (O(√p) space) for small p, and Pollard-rho (O(1) space) for large p
     discrete_log_solver = _pollard_rho_log if p.bit_length() > 48 else _bsgs
+    g, h = g % mod, h % mod
     if e == 1:
         return discrete_log_solver(g, h, mod, p)
 
@@ -2455,6 +2917,7 @@ def _pohlig_hellman_prime_power(g: int, h: int, mod: int, p: int, e: int) -> int
     gamma = pow(g, p**(e - 1), mod)
 
     # Iteratively compute the p-adic digits of the logarithm
+    q = p**e
     x, prime_power, current_target, exponent = 0, 1, h, q
     for i in range(e):
         exponent //= p  # p^(e - 1 - i)
@@ -2480,7 +2943,7 @@ def _bsgs(g: int, h: int, mod: int, p: int) -> int:
     if p == 2:
         if h == 1 % mod: return 0
         if h == g % mod: return 1
-        raise NoSolutionError("No solution in order-2 subgroup")
+        raise _NoSolutionError("No solution in order-2 subgroup")
 
     table, m, g_m_inv = _bsgs_table(g % mod, mod, p)
     y = h % mod
@@ -2491,7 +2954,7 @@ def _bsgs(g: int, h: int, mod: int, p: int) -> int:
         else:
             y = (y * g_m_inv) % mod
 
-    raise NoSolutionError("No solution found (BSGS)")
+    raise _NoSolutionError("No solution found (BSGS)")
 
 @small_cache
 def _bsgs_table(g: int, mod: int, p: int) -> tuple[dict[int, int], int, int]:
@@ -2513,13 +2976,13 @@ def _pollard_rho_log(g: int, h: int, mod: int, p: int, partition_size: int = 32)
 
     Complexity
     ----------
-    O(√p) multiplications and O(1) space, where p is order of g
+    Las Vegas with expected O(√p) multiplications and O(1) space
     """
     g, h = g % mod, h % mod
 
     # Validate that g and h lie in the claimed subgroup
     if pow(g, p, mod) != 1 or pow(h, p, mod) != 1:
-        raise NoSolutionError("No solution exists")
+        raise _NoSolutionError("No solution exists")
 
     partition_size = 1 << (partition_size - 1).bit_length()
     mask = partition_size - 1
@@ -2570,21 +3033,22 @@ def _pollard_rho_log(g: int, h: int, mod: int, p: int, partition_size: int = 32)
 
 def _modular_roots_mod_prime(n: int, k: int, p: int) -> tuple[int, ...]:
     """
-    Find all solutions x to x^k ≡ n (mod p).
+    Find all solutions x to x^k ≡ n (mod p), where p is prime.
 
     Uses the Tonelli-Shanks algorithm when k = 2,
     or the Adleman-Manders-Miller (AMM) algorithm otherwise.
     """
     n %= p
-    if not is_prime(p):
-        raise ValueError("p must be prime")
-    elif k <= 0:
+    if k <= 0:
         raise ValueError("k must be a positive integer.")
     elif k == 1 or n == 0 or p == 2:
         return (n,)
     elif k == 2:
-        r = _tonelli_shanks(n, p)
-        return () if r is None else (r, -r % p)
+        try:
+            r = _tonelli_shanks(n, p)
+            return (r, -r % p)
+        except _NoSolutionError:
+            return ()
 
     # Use the generalized Euler criterion to test for the existence of a k-th root
     g = gcd(k, p - 1)
@@ -2622,20 +3086,19 @@ def _modular_roots_mod_prime(n: int, k: int, p: int) -> tuple[int, ...]:
         and all(pow(w, g // q, p) != 1 for q in pf)
     )
 
-    # Now enumerate all k-th roots:
-    # solutions = x * ζ where ζ^k=1, and that subgroup has size g
-    roots = []
-    w = 1
+    # Now enumerate all k-th roots
+    # The set of solutions is {x*ζ where ζ^k = 1}, which is a subgroup of size g
+    roots, w = [], 1
     for _ in range(g):
         roots.append((x * w) % p)
         w = (w * omega) % p
 
     return tuple(roots)
 
-def _tonelli_shanks(n: int, p: int) -> int | None:
+def _tonelli_shanks(n: int, p: int) -> int:
     """
     Tonelli-Shanks algorithm for finding modular square roots.
-    Returns a root r such that r^2 ≡ n (mod p), or None if no root exists.
+    Returns a root r such that r^2 ≡ n (mod p).
 
     See: https://www.cmat.edu.uy/~tornaria/pub/Tornaria-2002.pdf
 
@@ -2650,7 +3113,10 @@ def _tonelli_shanks(n: int, p: int) -> int | None:
         return n
     elif p % 4 == 3:
         r = pow(n, (p + 1) // 4, p)
-        return r if (r*r) % p == n else None
+        if r*r % p == n:
+            return r
+        else:
+            raise _NoSolutionError("No solution exists")
 
     # Write p - 1 as 2^s * q with q odd (by factoring out powers of 2)
     s, q = 0, p - 1
@@ -2659,7 +3125,11 @@ def _tonelli_shanks(n: int, p: int) -> int | None:
         s += 1
 
     # Find a quadratic non-residue
-    z = next(a for a in range(2, p) if pow(a, (p - 1) // 2, p) == p - 1)
+    if p % 8 == 5:
+        z = 2
+    else:
+        # When p = 1 (mod 4), (p | a) = (a | p) due to quadratic reciprocity
+        z = next(a for a in range(3, p, 2) if jacobi(p, a) == -1)
 
     # Iterative computation to calculate square root
     # Maintain invariant R^2 ≡ n * t (mod p) until t = 1
@@ -2671,7 +3141,7 @@ def _tonelli_shanks(n: int, p: int) -> int | None:
             i += 1
 
         if i >= M:
-            return None
+            raise _NoSolutionError("No solution exists")
 
         b = pow(c, 2**(M-i-1), p)  # root of unity of order 2^(i+1)
         M = i  # ord(t) = 2^M
@@ -2681,10 +3151,10 @@ def _tonelli_shanks(n: int, p: int) -> int | None:
 
     return R
 
-def _adleman_manders_miller(delta: int, r: int, p: int) -> int | None:
+def _adleman_manders_miller(delta: int, r: int, p: int) -> int:
     """
     Adleman-Manders-Miller r-th root extraction in finite field F_p when r | (p - 1).
-    Returns a single root x with x^r = delta (mod p), or None if no root exists.
+    Returns a single root x with x^r = delta (mod p).
 
     See: https://arxiv.org/pdf/1111.4877
     See: https://www.cs.cmu.edu/~glmiller/Publications/AMM77.pdf
@@ -2703,7 +3173,7 @@ def _adleman_manders_miller(delta: int, r: int, p: int) -> int | None:
 
     # Use the generalized Euler criterion to test for the existence of an r-th root
     if pow(delta, (p - 1) // r, p) != 1:
-        return None
+        raise _NoSolutionError("No solution exists")
 
     # Write p - 1 = r^t * s with gcd(r, s) = 1
     t, s = 0, p - 1
@@ -3322,6 +3792,57 @@ def euler_transform(a: Callable[[int], int]) -> Callable[[int], int]:
 
     return b
 
+def sum_of_squares_count(n: int, k: int) -> int:
+    """
+    Compute r_k(n), the number of representations of n as a sum of k squares.
+
+    Counts ordered representations with signs, i.e., the number of integer
+    tuples (x_1, ..., x_k) such that x_1^2 + ... + x_k^2 = n.
+
+    Uses closed-form formulas for k = 1, 2, and 4.
+
+    Parameters
+    ----------
+    n : int
+        Non-negative integer to represent
+    k : int
+        Number of squares
+    """
+    if n < 0 or k < 0:
+        return 0
+    if k == 0:
+        return 1 if n == 0 else 0
+    if n == 0:
+        return 1
+
+    if k == 1:
+        sqrt_n = isqrt(n)
+        return 2 if sqrt_n * sqrt_n == n else 0
+
+    if k == 2:
+        # r_2(n) = 4 * Π_{p≡1(4)} (e_p + 1) if all primes q≡3(4) have even exponent
+        product = 1
+        for p, e in prime_factorization(n).items():
+            if p % 4 == 3:
+                if e % 2 == 1:
+                    return 0
+            elif p % 4 == 1:
+                product *= e + 1
+        return 4 * product
+
+    if k == 4:
+        # r_4(n) = 8 * Σ_{d|n, 4∤d} d
+        sigma = divisor_function(n)
+        return 8 * sigma - 32 * divisor_function(n // 4) if n % 4 == 0 else 8 * sigma
+
+    # General recurrence: r_k(n) = Σ_{j=-√n}^{√n} r_{k-1}(n - j^2)
+    total = sum_of_squares_count(n, k - 1)
+    j = 1
+    while j * j <= n:
+        total += 2 * sum_of_squares_count(n - j * j, k - 1)
+        j += 1
+    return total
+
 def _digits_in_base(n: int, b: int) -> tuple[int, ...]:
     """
     Return the digits of integer n in base b,
@@ -3348,15 +3869,210 @@ def _digits_in_base(n: int, b: int) -> tuple[int, ...]:
 
 
 ########################################################################
+######################### Integer Sequences ###########################
+########################################################################
+
+@small_cache
+def lucas(n: int, P: int = 1, Q: int = -1, mod: int | None = None) -> int:
+    """
+    Return the n-th Lucas sequence number U_n(P, Q).
+
+    The Lucas sequence is defined by the recurrence
+        U_0 = 0
+        U_1 = 1
+        U_n = P * U_{n-1} - Q * U_{n-2}
+
+    The Fibonacci sequence is the special case where P=1 and Q=-1.
+
+    Uses fast doubling with formulas
+        U_{2k} = U_k * (2*U_{k+1} - P*U_k)
+        U_{2k-1} = U_k^2 - Q*U_{k-1}^2
+        U_{2k+1} = P*U_{2k} - Q*U_{2k-1}
+
+    Parameters
+    ----------
+    n : int
+        Index of the Lucas sequence number
+    P : int
+        First parameter of the Lucas sequence (default 1)
+    Q : int
+        Second parameter of the Lucas sequence (default -1)
+    mod : int
+        Optional modulus
+    """
+    if n < 0:
+        if Q == 0:
+            raise ValueError("Lucas sequence with Q=0 undefined for negative indices")
+        U = lucas(-n, P, Q, mod)
+        if mod:
+            return (-U * pow(Q, n, mod)) % mod
+        else:
+            divisor = Q**(-n)
+            if U % divisor != 0:
+                raise ValueError(f"U_{n}(P={P}, Q={Q}) is not an integer")
+            return -U // divisor
+    if n == 0:
+        return 0
+    if n == 1:
+        return 1 % mod if mod else 1
+
+    # Fast doubling via binary representation
+    U_k, U_k_minus_1 = 1, 0
+
+    for i in range(n.bit_length() - 2, -1, -1):
+        # Doubling step: U_k -> U_{2k}
+        U_k_plus_1 = P*U_k - Q*U_k_minus_1
+        U_2k = U_k * (2*U_k_plus_1 - P*U_k)
+        U_2k_minus_1 = U_k*U_k - Q*U_k_minus_1*U_k_minus_1
+        if mod:
+            U_2k %= mod
+            U_2k_minus_1 %= mod
+
+        if (n >> i) & 1:
+            # Incrementing step: U_{2k} -> U_{2k+1}
+            U_2k_plus_1 = P*U_2k - Q*U_2k_minus_1
+            if mod:
+                U_2k_plus_1 %= mod
+            U_k, U_k_minus_1 = U_2k_plus_1, U_2k
+        else:
+            U_k, U_k_minus_1 = U_2k, U_2k_minus_1
+
+    return U_k % mod if mod else U_k
+
+@small_cache
+def fibonacci(i: int, mod: int | None = None) -> int:
+    """
+    Return the i-th Fibonacci number.
+
+    The Fibonacci sequence is a special case of the Lucas sequence U_n(1, -1).
+
+    Parameters
+    ----------
+    i : int
+        Index of the Fibonacci number
+    mod : int
+        Optional modulus
+    """
+    # For small positive i without modulus, use Binet's formula for speed
+    if 0 <= i <= 70 and mod is None:
+        phi = (1 + sqrt(5)) / 2
+        return round(phi**i / sqrt(5))
+
+    return lucas(i, P=1, Q=-1, mod=mod)
+
+def fibonacci_index(n: int) -> int:
+    """
+    Find the index of n in the Fibonacci sequence.
+    Returns the largest integer i such that F(i) <= n.
+
+    Parameters
+    ----------
+    n : int
+        Upper bound on Fibonacci number
+    """
+    if n < 0:
+        raise ValueError("Must have n >= 0")
+    if n == 0:
+        return 0
+    if n == 1:
+        return 2
+
+    # Find the maximum exponent representation of n = base^exp
+    base, exp = n, 1
+    while (power := perfect_power(base)) != (None, None):
+        base = power[0]
+        exp *= power[1]
+
+    # Compute parameters in logspace
+    phi = (1 + sqrt(5)) / 2  # golden ratio
+    log_phi = log(phi)
+    log_sqrt5 = 0.5 * log(5.0)
+    log_target = exp * log(base)  # log(n) = log(base^exp) = exp * log(base)
+
+    # Find Fibonacci index
+    i = max(1, int((log_target + log_sqrt5) / log_phi))
+    while i > 1 and log(fibonacci(i)) > log_target:
+        i -= 1
+    while log(fibonacci(i + 1)) <= log_target:
+        i += 1
+
+    return i
+
+def fibonacci_numbers(a: int = 0, b: int = 1, mod: int | None = None) -> Iterator[int]:
+    """
+    Generate Fibonacci numbers.
+
+    Parameters
+    ----------
+    a : int
+        First element of the Fibonacci sequence
+    b : int
+        Second element of the Fibonacci sequence
+    mod : int
+        Optional modulus
+    """
+    a = a % mod if mod else a
+    b = b % mod if mod else b
+    while True:
+        yield a
+        a, b = b, a + b
+        b = b % mod if mod else b
+
+def polygonal(s: int, i: int) -> int:
+    """
+    Return the i-th s-gonal number.
+    """
+    return (s - 2) * i * (i - 1) // 2 + i
+
+def polygonal_index(s: int, n: int) -> int:
+    """
+    Find the index of n in the s-gonal numbers.
+    Returns the largest integer i such that P(s, i) <= n.
+    """
+    if n < 0:
+        raise ValueError("n must be a nonnegative integer")
+    if n == 0:
+        return 0
+    if s == 2:
+        return n
+
+    return (isqrt(8 * n * (s - 2) + (s - 4) * (s - 4)) + s - 4) // (2 * (s - 2))
+
+def polygonal_numbers(s: int, low: int = 1, high: int | None = None) -> Iterator[int]:
+    """
+    Generate all s-gonal numbers in the range [low, high].
+    """
+    i = polygonal_index(s, low - 1) + 1
+    n = polygonal(s, i)
+    while high is None or n <= high:
+        yield n
+        n += (s - 2) * i + 1
+        i += 1
+
+def is_polygonal(s: int, n: int) -> bool:
+    """
+    Check if n is an s-gonal number.
+    """
+    if s == 2:
+        return True
+
+    D = 8 * n * (s - 2) + (s - 4) * (s - 4)
+    sqrt_D = isqrt(D)
+    return sqrt_D*sqrt_D == D and (sqrt_D + s - 4) % (2*s - 4) == 0
+
+
+
+########################################################################
 ############################ Linear Algebra ############################
 ########################################################################
 
-Matrix = list[list[Number]]
-Vector = list[Number]
-
-def linear_solve(A: Matrix, b: Vector) -> Vector:
+def linear_solve(A: Matrix, b: Vector) -> Vector | None:
     """
     Solve the system of linear equations given by Ax = b.
+
+    Uses the Bareiss algorithm on integer matrices, and Gauss-Jordan elimination
+    otherwise. For underdetermined systems, returns a particular solution
+    (with free variables set to 0). Use nullspace(A) to get the homogeneous part.
 
     Parameters
     ----------
@@ -3364,17 +4080,25 @@ def linear_solve(A: Matrix, b: Vector) -> Vector:
         M × N matrix of coefficients
     b : Vector
         List of M values
+
+    Returns
+    -------
+    Vector or None
+        A solution vector x such that Ax = b, or None if no solution exists.
     """
     if len(A) != len(b): raise ValueError("Matrix dimensions do not match")
+    if not A: return [] if not b else None
 
     # Get reduced row-echelon form of augmented matrix [A | b]
     augmented_matrix = [[*coefs, value] for coefs, value in zip(A, b)]
-    rref = _gauss_jordan(augmented_matrix)
+    if all(isinstance(item, int) for row in augmented_matrix for item in row):
+        rref = _bareiss(augmented_matrix)
+    else:
+        rref = _gauss_jordan(augmented_matrix)
 
     # Validate solution
     num_variables = len(A[0])
     pivot_value_by_col, pivot_cols = {}, set()
-    is_zero = lambda x: abs(x) < 1e-12 if isinstance(x, float) else x == 0
     for row in rref:
         lead = None
         for i in range(num_variables):
@@ -3384,15 +4108,60 @@ def linear_solve(A: Matrix, b: Vector) -> Vector:
 
         if lead is None:
             if not is_zero(row[-1]):
-                raise NoSolutionError("No solution")
+                return None  # no solution
         else:
             pivot_cols.add(lead)
             pivot_value_by_col[lead] = row[-1]
 
-    if len(pivot_cols) < num_variables:
-        raise NoSolutionError("Infinite solutions")
+    return [pivot_value_by_col.get(i, 0) for i in range(num_variables)]
 
-    return [row[-1] for row in rref]
+def nullspace(A: Matrix) -> list[Vector]:
+    """
+    Return a basis for the null space of A (the kernel of the linear map).
+    This is the set of all vectors x such that Ax = 0.
+
+    Parameters
+    ----------
+    A : Matrix
+        M × N matrix
+
+    Returns
+    -------
+    null_basis : list[Vector]
+        Basis vectors for the null space. 
+        Returns an empty list if only the trivial solution exists.
+    """
+    if not A: return []
+
+    num_cols = len(A[0])
+
+    # Get reduced row-echelon form
+    matrix = [row[:] for row in A]
+    if all(isinstance(x, int) for row in matrix for x in row):
+        rref = _bareiss(matrix)
+    else:
+        rref = _gauss_jordan(matrix)
+
+    # Find pivot columns
+    pivot_col_to_row = {}
+    for row_idx, row in enumerate(rref):
+        for i in range(num_cols):
+            if not is_zero(row[i]):
+                pivot_col_to_row[i] = row_idx
+                break
+
+    free_cols = [j for j in range(num_cols) if j not in pivot_col_to_row]
+
+    # Build null space basis (one vector per free variable)
+    basis = []
+    for free_col in free_cols:
+        vec = [0] * num_cols
+        vec[free_col] = 1
+        for pivot_col, row_idx in pivot_col_to_row.items():
+            vec[pivot_col] = -rref[row_idx][free_col]
+        basis.append(vec)
+
+    return basis
 
 def identity_matrix(n: int) -> Matrix:
     """
@@ -3447,13 +4216,17 @@ def _matrix_binary_op(
 def _gauss_jordan(A: Matrix) -> Matrix:
     """
     Gauss-Jordan elimination. Returns the given matrix in reduced row-echelon form.
+
+    Complexity
+    ----------
+    O(m²n) time for an m × n matrix
     """
     num_rows, num_cols = len(A), len(A[0])
     row = col = 0
     while row < num_rows and col < num_cols - 1:
         # Find pivot in current column
         pivot_row = max(range(row, num_rows), key=lambda r: abs(A[r][col]))
-        if A[pivot_row][col] == 0:
+        if is_zero(A[pivot_row][col]):
             col += 1
             continue
 
@@ -3473,282 +4246,60 @@ def _gauss_jordan(A: Matrix) -> Matrix:
 
     return A
 
-
-
-########################################################################
-################################ Graphs ################################
-########################################################################
-
-Node = Hashable
-
-def search(
-    start: Iterable[Node],
-    find_next: Callable[[Node], Iterable[Node]],
-    found: Callable[[Node], bool] | None = None,
-    stop: Callable[[Node], bool] | None = None,
-) -> Iterator[Node]:
+def _bareiss(A: Matrix) -> Matrix:
     """
-    Depth first search.
+    Bareiss algorithm (fraction-free Gaussian elimination).
+    Returns the matrix in row-echelon form using exact arithmetic.
 
-    Parameters
+    Unlike Gauss-Jordan, rows are NOT normalized until the end,
+    and are returned as int or Fraction types. This avoids floating-point
+    errors for integer matrices.
+
+    See: https://www.ams.org/journals/mcom/1968-22-103/S0025-5718-1968-0226829-0/
+
+    Complexity
     ----------
-    start : Iterable[Node]
-        Initial nodes to start searching from
-    find_next : Callable(Node) -> Iterable[Node]
-        Generate all candidates for the next node in the search
-    found : Callable(Node) -> bool
-        Whether or not a given node is a solution
-    stop : Callable(Node) -> bool
-        Whether or not to stop searching from a given node
+    O(m²n) time for an m × n matrix
     """
-    stack = deque(start)
-    get_node, visit_nodes = stack.pop, stack.extend
-    while stack:
-        node = get_node()
-        if found is None or found(node):
-            yield node
-        if stop is None or not stop(node):
-            visit_nodes(find_next(node))
+    num_rows, num_cols = len(A), len(A[0])
+    prev_pivot = 1
+    pivot_row = 0
 
-def dijkstra(
-    source: Node,
-    neighbors_fn: Callable[[Node], Iterable[Node]],
-    edge_weight_fn: Callable[[Node, Node], float],
-) -> tuple[dict[Node, float], dict[Node, Node]]:
-    """
-    Use Dijkstra's algorithm to find the shortest path from a source node
-    to all other nodes in a graph.
+    for col in range(num_cols - 1):
+        if pivot_row >= num_rows:
+            break
 
-    Parameters
-    ----------
-    source : Node
-        Source node
-    neighbors_fn : Callable(Node) -> Iterable[Node]
-        Function that returns all neighbors of a given node.
-    edge_weight_fn : Callable(Node, Node) -> float
-        Function that returns the weight of the edge between two nodes.
+        # Find non-zero pivot in current column
+        pivot_idx = None
+        for r in range(pivot_row, num_rows):
+            if A[r][col] != 0:
+                pivot_idx = r
+                break
 
-    Returns
-    -------
-    dist : dict[Node, float]
-        Shortest distance from the source node to each node
-    prev : dict[Node, Node]
-        Predecessor of each node in the shortest path
-    """
-    dist = defaultdict(lambda: inf, {source: 0})
-    prev = defaultdict(lambda: None)
-    queue = [(0, source)]
-    while queue:
-        dist_u, u = heappop(queue)
-        if dist_u > dist[u]:
-            continue
-        for v in neighbors_fn(u):
-            alt = dist[u] + edge_weight_fn(u, v)
-            if alt < dist[v]:
-                dist[v], prev[v] = alt, u
-                heappush(queue, (alt, v))
-
-    return dist, prev
-
-def find_cycles(
-    find_next: Callable[[tuple[Node, ...]], Iterable[Node]] = lambda path: [],
-    current_path: list[Node] | None = None,
-) -> Iterator[list[Node]]:
-    """
-    Find cycles in a directed graph.
-
-    Parameters
-    ----------
-    find_next : Callable(tuple[Node, ...]) -> Iterable[Node]
-        Function that returns all candidates for the next node in the path
-    current_path : list[Node]
-        Current path in the graph
-    """
-    start_path = tuple(current_path or ())
-    find_next_path = lambda path: (path + (v,) for v in find_next(path))
-    found = lambda path: path and path[-1] in path[:-1]
-    for cycle in search([start_path], find_next_path, found=found, stop=found):
-        yield cycle[cycle.index(cycle[-1]):-1]
-
-def find_functional_cycles(
-    f: Callable[[int], int],
-    search: Iterable[int],
-    domain: range,
-    on_cycle: Callable[[int, int], None],
-) -> None:
-    """
-    Find cycles in the functional graph defined by f(n).
-
-    Parameters
-    ----------
-    f : Callable(int) -> int
-        Function defining the graph
-    search : Iterable[int]
-        Starting points to search for cycles
-    domain : range
-        Range of valid nodes in the graph
-    on_cycle : Callable(cycle_start: int, cycle_node: int)
-        Callback function for when a cycle is found,
-        called for each node in the cycle
-    """
-    if domain.step != 1:
-        raise ValueError("domain must have step size 1")
-
-    low = domain.start
-    cycle_id = [None] * len(domain)
-    for start in search:
-        # Advance until we find a cycle
-        x, i = start, start - low
-        while x in domain and cycle_id[i] is None:
-            cycle_id[i], x = start, f(x)
-            i = x - low
-
-        # If this is a new cycle, walk through it
-        if x in domain and cycle_id[i] == start:
-            y = x
-            on_cycle(x, y)
-            while (y := f(y)) != x:
-                on_cycle(x, y)
-
-def topological_sort(graph: dict[Node, Iterable[Node]]) -> list[Node]:
-    """
-    Perform a topological sort on a directed acyclic graph (DAG).
-    Uses depth-first search.
-
-    Parameters
-    ----------
-    graph : dict[Node, Iterable[Node]]
-        Graph represented as an adjacency list
-    """
-    visited, current_path, order = set(), set(), []
-    nodes = set(graph.keys()).union(*(set(neighbors) for neighbors in graph.values()))
-    for start in nodes:
-        if start in visited:
+        if pivot_idx is None:
             continue
 
-        # Maintain a stack of (node, state) tuples
-        # where state takes on values: 0 = enter, 1 = exit
-        stack = [(start, 0)]
-        while stack:
-            v, state = stack.pop()
-            if state == 0:
-                # Skip visited nodes and detect cycles
-                if v in visited:
-                    continue
-                if v in current_path:
-                    raise ValueError("Detected cycle in graph.")
+        # Swap pivot row into position
+        A[pivot_row], A[pivot_idx] = A[pivot_idx], A[pivot_row]
+        pivot = A[pivot_row][col]
 
-                # Schedule exit and push neighbors
-                current_path.add(v)
-                stack.append((v, 1))
-                for u in graph.get(v, ()):
-                    if u not in visited:
-                        stack.append((u, 0))
-            else:
-                # Add node to topological ordering
-                current_path.remove(v)
-                visited.add(v)
-                order.append(v)
+        # Eliminate below (and above for RREF-like form)
+        for r in range(num_rows):
+            if r == pivot_row: continue
+            if A[r][col] == 0: continue
+            factor = A[r][col]
+            for c in range(num_cols):
+                A[r][c] = (A[r][c] * pivot - A[pivot_row][c] * factor) // prev_pivot
 
-    order.reverse()
-    return order
+        prev_pivot = pivot
+        pivot_row += 1
 
-def bron_kerbosch(
-    graph: dict[Node, set[Node]],
-    R: set[Node] | None = None,
-    P: set[Node] | None = None,
-    X: set[Node] | None = None,
-) -> list[set[Node]]:
-    """
-    Recursive implementation of the Bron-Kerbosch algorithm
-    for finding maximal cliques.
+    # Normalize rows by leading coefficient
+    for row in A:
+        if (lead := next((x for x in row if x), None)) is None: continue
+        row[:] = [v // lead if v % lead == 0 else Fraction(v, lead) for v in row]
 
-    Parameters
-    ----------
-    graph : dict[Node, set[Node]]
-        Graph represented as an adjacency list
-    R : set[Node]
-        Current clique
-    P : set[Node]
-        Nodes that can be added to clique
-    X : set[Node]
-        Nodes to be excluded from clique
-
-    Returns
-    -------
-    maximal_cliques : list[set[Node]]
-        List of maximal cliques in the graph
-    """
-    R = set() if R is None else R
-    P = set(graph.keys()) if P is None else P
-    X = set() if X is None else X
-
-    maximal_cliques = []
-    if not P and not X:
-        maximal_cliques.append(R)
-
-    # Choose pivot node u to maximize |P ∩ N(u)|
-    u = max(P | X, key=lambda v: len(graph[v]), default=None)
-    candidates = P - (graph[u] if u is not None else set())
-
-    # Explore candidates
-    for v in candidates:
-        maximal_cliques += bron_kerbosch(graph, R | {v}, P & graph[v], X & graph[v])
-        P = P - {v}
-        X = X | {v}
-
-    return maximal_cliques
-
-def kruskal(
-    nodes: Iterable[Node],
-    edges: Iterable[tuple[Node, Node]],
-    get_edge_weight: Callable[[Node, Node], float],
-) -> list[tuple[Node, Node]]:
-    """
-    Use Kruskal's algorithm to find a minimum spanning tree.
-
-    Parameters
-    ----------
-    nodes : Iterable[Node]
-        Nodes in the graph
-    edges : Iterable[tuple[Node, Node]]
-        Edges in the graph
-    get_edge_weight : Callable(Node, Node) -> float
-        Function that returns the weight of the edge between two nodes
-
-    Returns
-    -------
-    minimum_spanning_tree : list[tuple[Node, Node]]
-        Edges in the minimum spanning tree
-    """
-    parent, rank = {v: v for v in nodes}, defaultdict(int)
-
-    # Path compression
-    def find(x: Node) -> Node:
-        if parent[x] != x:
-            parent[x] = find(parent[x])
-        return parent[x]
-
-    # Union by rank
-    def union(x: Node, y: Node) -> bool:
-        root_x, root_y = find(x), find(y)
-        if root_x == root_y:
-            return False
-        if rank[root_x] < rank[root_y]:
-            parent[root_x] = root_y
-        elif rank[root_x] > rank[root_y]:
-            parent[root_y] = root_x
-        else:
-            parent[root_y] = root_x
-            rank[root_x] += 1
-        return True
-
-    minimum_spanning_tree = []
-    for u, v in sorted(edges, key=lambda edge: get_edge_weight(*edge)):
-        if union(u, v):
-            minimum_spanning_tree.append((u, v))
-
-    return minimum_spanning_tree
+    return A
 
 
 
@@ -3756,11 +4307,25 @@ def kruskal(
 ############################## Utilities ###############################
 ########################################################################
 
+def one(n: int) -> int:
+    """
+    The constant 1 function. Returns 1 for all inputs.
+    """
+    return 1
+
+def identity(n: int) -> int:
+    """
+    The identity function f(n) = n.
+    """
+    return n
+
 def nth(iterable: Iterable, n: int, default: Any = None) -> Any:
     """
     Return the n-th item from an iterable (1-based index).
     If the iterable has fewer than n items, return default.
     """
+    if n < 1:
+        raise ValueError("n must be a positive integer (1-indexed)")
     return next(itertools.islice(iterable, n - 1, None), default)
 
 def group_by_key(
@@ -3798,6 +4363,60 @@ def group_permutations(iterable: Iterable[Sequence]) -> Iterable[list[Sequence]]
     """
     key = lambda sequence: tuple(sorted(sequence))
     return iter(group_by_key(iterable, key=key).values())
+
+def permutation(n: int, master_key: bytes | None = None) -> Iterator[int]:
+    """
+    Generate a pseudorandom permutation of the integers 0, 1, ..., n - 1.
+    """
+    if n < 1:
+        raise ValueError("n must be a positive integer")
+    if n == 1:
+        yield 0
+        return
+
+    # Derive num_rounds * 32 bytes of round-key material
+    master_key = secrets.token_bytes(32) if master_key is None else master_key
+    keys = tuple(
+        hmac.digest(master_key, b'feistel-round' + i.to_bytes(4, 'big'), hashlib.sha256)
+        for i in range(16)
+    )
+
+    # Pre-compute mask
+    m = (n - 1).bit_length()
+    m += (m & 1)  # round up to even
+    half = m // 2
+    half_bytes = (half + 7) // 8
+    mask = (1 << half) - 1
+
+    def expand_hmac_sha256(key: bytes, msg: bytes, output_length: int) -> bytes:
+        # HMAC-SHA256 in counter mode
+        out, offset, counter = bytearray(output_length), 0, 0
+        while offset < output_length:
+            block = hmac.digest(key, msg + counter.to_bytes(4, 'big'), hashlib.sha256)
+            take = min(len(block), output_length - offset)
+            out[offset:offset+take] = block[:take]
+            offset += take
+            counter += 1
+
+        return bytes(out)
+
+    def feistel(x: int) -> int:
+        l, r = (x >> half) & mask, x & mask
+        for k in keys:
+            msg = r.to_bytes(half_bytes, 'big')
+            f = int.from_bytes(expand_hmac_sha256(k, msg, half_bytes), 'big') & mask
+            l, r = r, (l ^ f) & mask
+
+        return (l << half) | r
+
+    # Cycle-walking to restrict from [0, 2^m) to [0, n)
+    for x in range(n):
+        y = x
+        while True:
+            y = feistel(y)
+            if y < n:
+                yield y
+                break
 
 def powerset(iterable: Iterable) -> Iterable[tuple]:
     """
@@ -3858,18 +4477,18 @@ def iroot(x: int, n: int = 2) -> int:
     Uses Newton's method.
     """
     # Handle special cases
+    if n == 2:
+        return isqrt(x)
+    if n == 1:
+        return x
+    if n <= 0:
+        raise ValueError("n must be a positive integer")
     if x < 0:
         if n % 2 == 0:
             raise ValueError("Cannot compute even root of negative number")
         return -iroot(-x - 1, n) - 1
     if x == 0:
         return 0
-    if n <= 0:
-        raise ValueError("n must be a positive integer")
-    if n == 1:
-        return x
-    if n == 2:
-        return isqrt(x)
 
     # Set initial guess to 2^ceil(log2(x)/n)
     a = 1 << ((x.bit_length() + n - 1) // n)
@@ -3961,17 +4580,17 @@ def perfect_power(n: int) -> tuple[int | None, int | None]:
         return (-1, 3)
 
     is_negative = n < 0
-    m = -n if is_negative else n
+    n = -n if is_negative else n
 
     # Squares only make sense for non-negative n (and we special-case them for speed)
     if not is_negative:
-        r = isqrt(m)
-        if r * r == m:
+        r = isqrt(n)
+        if r * r == n:
             return (r, 2)
 
-    for k in primes(low=3, high=m.bit_length()):
-        r = iroot(m, k)
-        if pow(r, k) == m:
+    for k in primes(low=3, high=n.bit_length()):
+        r = iroot(n, k)
+        if pow(r, k) == n:
             return (-r if is_negative else r), k
 
     return None, None
@@ -3992,6 +4611,12 @@ def binary_search(
         high = low + span
 
     return low + bisect.bisect_left(range(low, high + 1), threshold, key=f)
+
+def is_zero(x: Number, tol: float = 1e-12) -> bool:
+    """
+    Return whether the given number is zero (within a given tolerance).
+    """
+    return abs(x) < tol if isinstance(x, (float, complex)) else x == 0
 
 def _threshold_select(
     value: int,
@@ -4020,122 +4645,8 @@ def _threshold_select(
 
 
 ########################################################################
-############################### Extras ################################
+################################ Digits ################################
 ########################################################################
-
-@small_cache
-def fibonacci(i: int, mod: int | None = None) -> int:
-    """
-    Return the i-th Fibonacci number.
-
-    Parameters
-    ----------
-    i : int
-        Index of the Fibonacci number
-    mod : int
-        Optional modulus
-    """
-    if i < 0:
-        f = (-1)**((i % 2) + 1) * fibonacci(-i, mod)
-    elif i <= 70:
-        phi = (1 + sqrt(5)) / 2
-        f = round(phi**i / sqrt(5))
-    elif i % 2 == 0:
-        i = i // 2
-        f = fibonacci(i + 1, mod)**2 - fibonacci(i - 1, mod)**2
-    else:
-        i = (i + 1) // 2
-        f = fibonacci(i, mod)**2 + fibonacci(i - 1, mod)**2
-
-    return f % mod if mod else f
-
-def fibonacci_index(base: int, exp: int = 1) -> int:
-    """
-    Find the index of base^exp in the Fibonacci sequence.
-    Returns the largest integer i such that F(i) <= base^exp.
-
-    Parameters
-    ----------
-    base : int
-        Base of the Fibonacci number
-    exp : int
-        Exponent of the Fibonacci number
-    """
-    if base <= 1 or exp <= 0:
-        raise ValueError("The value of `base^exp` must be greater than 1.")
-
-    # Parameters in logspace
-    phi = (1 + sqrt(5)) / 2  # golden ratio
-    log_phi = log(phi)
-    log_sqrt5 = 0.5 * log(5.0)
-    log_target = exp * log(base)  # log(base^exp) = exp * log(base)
-
-    # Find Fibonacci index
-    i = max(1, int((log_target + log_sqrt5) / log_phi))
-    while i > 1 and log(fibonacci(i)) > log_target:
-        i -= 1
-    while log(fibonacci(i + 1)) <= log_target:
-        i += 1
-
-    return i
-
-def fibonacci_numbers(a: int = 0, b: int = 1, mod: int | None = None) -> Iterator[int]:
-    """
-    Generate Fibonacci numbers.
-
-    Parameters
-    ----------
-    a : int
-        First element of the Fibonacci sequence
-    b : int
-        Second element of the Fibonacci sequence
-    mod : int
-        Optional modulus
-    """
-    a = a % mod if mod else a
-    b = b % mod if mod else b
-    while True:
-        yield a
-        a, b = b, a + b
-        b = b % mod if mod else b
-
-def polygonal(s: int, i: int) -> int:
-    """
-    Return the i-th s-gonal number.
-    """
-    return (s - 2) * i * (i - 1) // 2 + i
-
-def polygonal_index(s: int, n: int) -> int:
-    """
-    Find the index of n in the s-gonal numbers.
-    Returns the largest integer i such that P(s, i) <= n.
-    """
-    if s == 2:
-        return n
-    else:
-        return (isqrt(8 * n * (s - 2) + (s - 4) * (s - 4)) + s - 4) // (2 * (s - 2))
-
-def polygonal_numbers(s: int, low: int = 1, high: int | None = None) -> Iterator[int]:
-    """
-    Generate all s-gonal numbers in the range [low, high].
-    """
-    i = polygonal_index(s, low - 1) + 1
-    n = polygonal(s, i)
-    while high is None or n <= high:
-        yield n
-        n += (s - 2) * i + 1
-        i += 1
-
-def is_polygonal(s: int, n: int) -> bool:
-    """
-    Check if n is an s-gonal number.
-    """
-    if s == 2:
-        return True
-
-    D = 8 * n * (s - 2) + (s - 4) * (s - 4)
-    sqrt_D = isqrt(D)
-    return sqrt_D*sqrt_D == D and (sqrt_D + s - 4) % (2*s - 4) == 0
 
 def digit_sum(n: int) -> int:
     """
@@ -4176,7 +4687,7 @@ def digit_combinations(max_digits: int) -> Iterator[tuple[int, int]]:
     """
     factorials = [factorial(i) for i in range(max_digits + 1)]
     for d in range(1, max_digits + 1):
-        for digits in itertools.combinations_with_replacement(string.digits, d):
+        for digits in itertools.combinations_with_replacement('0123456789', d):
             i = next((i for i, ch in enumerate(digits) if ch != '0'), None)
             if i is None: continue  # skip all-zero case
             digit_counts = Counter(digits)
@@ -4228,8 +4739,85 @@ def digit_permutations(n: int) -> Iterator[int]:
 ############################## Constants ###############################
 ########################################################################
 
-@small_cache
-def _int_str_mod():
+def _get_pool() -> multiprocessing.pool.Pool | None:
+    """
+    Get or create the persistent multiprocessing pool.
+    """
+    if getattr(multiprocessing.process.current_process(), '_inheriting', False):
+        return None
+    if multiprocessing.process.current_process()._config.get('daemon'):
+        return None
+
+    pool = None
+    state, touch = _get_pool_state()
+    with state['lock']:
+        if state['pid'] != os.getpid():
+            state['pid'], state['pool'] = os.getpid(), None
+            timer = state.get('timer')
+            if timer:
+                try: timer.cancel()
+                except Exception: pass
+            state['timer'] = None
+
+        pool = state.get('pool')
+        if not pool or getattr(pool, '_state', None) != multiprocessing.pool.RUN:
+            num_processes = min(8, multiprocessing.cpu_count())
+            pool = state['pool'] = state['context'].Pool(processes=num_processes)
+
+    touch()
+    return pool
+
+@singleton
+def _get_pool_state() -> dict[str, Any]:
+    """
+    Get or create state for the persistent multiprocessing pool.
+    """
+    try:
+        context = multiprocessing.get_context('forkserver')
+    except ValueError:
+        context = multiprocessing.get_context()
+
+    state = {
+        'pid': os.getpid(),
+        'context': context,
+        'pool': None,
+        'timer': None,
+        'lock': Lock(),
+    }
+
+    def shutdown():
+        with state['lock']:
+            timer, pool = state.get('timer'), state.get('pool')
+            state['timer'] = None
+            state['pool'] = None
+            if timer:
+                try: timer.cancel()
+                except Exception: pass
+            if pool:
+                try:
+                    pool.terminate()
+                    pool.join()
+                except Exception:
+                    pass
+
+    def touch():
+        with state['lock']:
+            if state.get('pool') is None:
+                return
+            timer = state.get('timer')
+            if timer:
+                try: timer.cancel()
+                except Exception: pass
+            timer = Timer(600, shutdown)
+            timer.daemon = True
+            state['timer'] = timer
+            timer.start()
+
+    atexit.register(shutdown)
+    return state, touch
+
+@singleton
+def _int_str_mod() -> int:
     """
     Return safe modulus (10^n) for chunking integers during string conversion.
     Respects sys.get_int_max_str_digits() limit, capped at 10^10000.
