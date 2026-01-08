@@ -12,13 +12,14 @@ import hashlib
 import hmac
 import itertools
 import multiprocessing
+import os
 import secrets
 import string
 import sys
+import threading
 
 from collections import Counter, defaultdict, deque
 from collections.abc import Sequence
-from decimal import Decimal
 from fractions import Fraction
 from functools import lru_cache, partial, reduce
 from heapq import heappop, heappush
@@ -28,10 +29,54 @@ from typing import Any, Callable, Hashable, Iterable, Iterator, TypeAlias
 
 
 
-Number: TypeAlias = int | float | complex | Decimal | Fraction
-NoSolutionError = type('NoSolutionError', (Exception,), {})
+########################################################################
+########################### Table of Contents ##########################
+########################################################################
+
+__all__ = [
+    'Number', 'Vector', 'Matrix',
+    # Primes
+    'is_prime', 'next_prime', 'random_prime', 'primes', 'count_primes', 'sum_primes',
+    # Factorization
+    'prime_factors', 'prime_factorization', 'divisors',
+    # Arithmetic Functions
+    'mobius', 'mobius_range', 'radical', 'radical_range',
+    'divisor_function', 'divisor_count_range', 'divisor_function_range',
+    'aliquot_sum_range', 'totient', 'totient_range', 'carmichael',
+    # Modular Arithmetic
+    'egcd', 'crt', 'hensel', 'multiplicative_order', 'primitive_root',
+    'legendre', 'jacobi', 'kronecker', 'dirichlet_character',
+    # Exponential Congruences
+    'discrete_log', 'modular_roots',
+    # Diophantine Equations
+    'bezout', 'cornacchia', 'pell', 'pythagorean_triples',
+    'periodic_continued_fraction', 'convergents',
+    # Combinatorics
+    'pascal', 'factorial_valuation', 'binomial_valuation',
+    'partition_numbers', 'count_partitions', 'euler_transform',
+    'sum_of_squares_count',
+    # Integer Sequences
+    'lucas', 'fibonacci', 'fibonacci_index', 'fibonacci_numbers',
+    'polygonal', 'polygonal_index', 'polygonal_numbers', 'is_polygonal',
+    # Linear Algebra
+    'linear_solve', 'nullspace', 'identity_matrix', 'matrix_apply', 'matrix_transpose',
+    'matrix_sum', 'matrix_difference', 'matrix_product',
+    # Utilities
+    'one', 'identity', 'nth', 'group_by_key', 'group_permutations',
+    'permutation', 'powerset', 'disjoint_subset_pairs', 'polynomial',
+    'iroot', 'ilog', 'is_square', 'non_squares', 'squares', 'cubes',
+    'perfect_power', 'binary_search', 'is_zero',
+    # Digits
+    'digit_sum', 'digit_count', 'digit_combinations', 'digit_permutations',
+]
+
+Number: TypeAlias = int | float | complex | Fraction
+Vector: TypeAlias = list[Number]
+Matrix: TypeAlias = list[list[Number]]
+singleton = lru_cache(maxsize=1)
 small_cache = lru_cache(maxsize=128)
 large_cache = lru_cache(maxsize=1048576)
+_NoSolutionError = type('_NoSolutionError', (Exception,), {})
 
 
 
@@ -56,7 +101,7 @@ def is_prime(n: int) -> bool:
     n : int
         Integer to test for primality
     """
-    if n & 1 == 0 or n < 3:  # n is even or n < 3
+    if (n & 1) == 0 or n < 3:  # n is even or n < 3
         return n == 2
 
     # Use primorial GCD equivalent to trial division
@@ -829,7 +874,9 @@ def _phi_prime_sum(x: int, a: int, small_primes: tuple[int, ...]) -> int:
     which gives the sum of positive integers <= x coprime to the first a primes.
     """
     if a == 0:
-        return x * (x + 1) // 2
+        return x * (x + 1) // 2  # sum of all integers <= x
+    elif a == 1:
+        return ((x + 1) // 2)**2  # sum of odd integers <= x
     elif a < 8:
         # Use direct formula based on periodicity of coprimes mod P
         q, r = divmod(x, P := _primorial(a))
@@ -1036,7 +1083,7 @@ def _brent(
     Expected Õ(√p) time, where p is smallest prime factor. Õ(n¹ᐟ⁴) time for semiprimes.
     Deterministic O(√n) worst case.
     """
-    if n & 1 == 0:
+    if (n & 1) == 0:
         return 2
     if n == 25:
         return 5
@@ -1139,7 +1186,7 @@ def _ecm(
     ----------
     O(exp((√2 + o(1)) √(log p log log p))) time, where p is smallest prime factor
     """
-    if n & 1 == 0:
+    if (n & 1) == 0:
         return 2
 
     # Heuristics tuned for 64–128-bit composites.
@@ -1348,7 +1395,7 @@ def _ecm_stage_2_plan(
         All unique offset values that need to be precomputed
     """
     if B2 <= B1:
-        return 0, {}, ()
+        return 0, {}, frozenset()
 
     # Choose giant step size D ≈ √B2, but ensure D/2 ≤ B1
     # This avoids k = 0 cases and huge baby-step sets
@@ -1579,7 +1626,7 @@ def _build_factor_base(n: int, B: int) -> list[tuple[int, float, int]]:
         if pow(n % p, (p - 1) // 2, p) != 1: continue  # skip non-residues
         try:
             factor_base.append((p, log(p), _tonelli_shanks(n, p)))
-        except NoSolutionError:
+        except _NoSolutionError:
             continue
 
     return factor_base
@@ -1759,6 +1806,9 @@ def _get_large_primes(
     Returns tuple of up to `max_large_prime_count` primes if v factors completely
     over `possible_large_primes`, otherwise returns None.
     """
+    if not possible_large_primes:
+        return None
+
     L = possible_large_primes[-1]
     if v == 1:
         return ()
@@ -2161,7 +2211,7 @@ def crt(residues: Iterable[int], moduli: Iterable[int]) -> int | None:
     """
     try:
         return reduce(_crt_two_congruences, zip(residues, moduli), (0, 1))[0]
-    except NoSolutionError:
+    except _NoSolutionError:
         return None
 
 def hensel(
@@ -2278,7 +2328,7 @@ def primitive_root(n: int) -> int | None:
 
     # Check if a primitive root exists
     pf = prime_factorization(n)
-    if not ((len(pf) == 1 and n & 1 == 1) or (len(pf) == 2 and pf.get(2, 0) == 1)):
+    if not ((len(pf) == 1 and (n & 1) == 1) or (len(pf) == 2 and pf.get(2, 0) == 1)):
         return None
 
     # Find a primitive root mod p
@@ -2292,8 +2342,8 @@ def primitive_root(n: int) -> int | None:
 
     # Force g to be odd
     # Any odd root mod p^e is a root mod 2p^e
-    if n & 1 == 0:
-        return g if g & 1 == 1 else g + n // 2
+    if (n & 1) == 0:
+        return g if (g & 1) == 1 else g + n // 2
     else:
         return g
 
@@ -2335,10 +2385,10 @@ def jacobi(a: int, n: int) -> int:
     J = 1
     while (a := a % n) != 0:
         # Extract factors of 2 from a
-        if not a & 1:
+        if (a & 1) == 0:
             s = (a & -a).bit_length() - 1
             a >>= s
-            if s & 1 and n & 7 in (3, 5):  # s is odd and n = ± 3 (mod 8)
+            if (s & 1) == 1 and n & 7 in (3, 5):  # s is odd and n = ± 3 (mod 8)
                 J = -J
 
         # Apply quadratic reciprocity
@@ -2373,12 +2423,12 @@ def kronecker(a: int, n: int) -> int:
     n >>= exp
 
     # If both a and n are even, (a | n) = 0
-    if not a & 1 and exp:
+    if (a & 1) == 0 and exp:
         return 0
 
     # Compute (a | 2)^exp
-    K = 1 if a & 7 in (1, 7) else -1 # check whether a = ± 1 (mod 8)
-    if not exp & 1: K = 1 # check whether exp is odd
+    K = 1 if (a & 7) in (1, 7) else -1 # check whether a = ± 1 (mod 8)
+    if (exp & 1) == 0: K = 1 # check whether exp is even
 
     return sign * K * jacobi(a % n, n)
 
@@ -2435,7 +2485,7 @@ def _crt_two_congruences(
     d = gcd(n1, n2)
     diff = a2 - a1
     if diff % d != 0:
-        raise NoSolutionError("No solution exists for the given system of congruences.")
+        raise _NoSolutionError("No solution exists for the given pair of congruences.")
 
     # Reduce to coprime moduli and compute modular inverse
     n1_, n2_ = n1 // d, n2 // d
@@ -2645,7 +2695,7 @@ def discrete_log(a: int, b: int, mod: int) -> int | None:
         try:
             x_i, ord_i = _discrete_log_mod_prime_power(a, b, p, e)
             congruences.append((x_i, ord_i))
-        except NoSolutionError:
+        except _NoSolutionError:
             return None  # no solution exists
 
     # Combine solutions via Chinese Remainder Theorem
@@ -2715,14 +2765,14 @@ def _discrete_log_mod_prime_power(a: int, b: int, p: int, e: int) -> tuple[int, 
         ord_5 = 2**(e - 2)  # size of <5> in (Z/qZ)×
         g = gcd(t_a, ord_5)  # index of <5^{t_a}> inside <5>
         if t_b % g != 0:
-            raise NoSolutionError("No solution exists")  # 5^(t_b) not in <5^(t_a)>
+            raise _NoSolutionError("No solution exists")  # 5^(t_b) not in <5^(t_a)>
 
         ord_a = ord_5 // g  # size of the subgroup <5^{t_a}>
 
         # Handle the degenerate a = ± 1 case (trivial 5-part)
         if ord_a == 1:
             if s_a == 0 and s_b != 0:
-                raise NoSolutionError("No solution exists")
+                raise _NoSolutionError("No solution exists")
             return (0, 1) if s_a == 0 else (s_b, 2)
 
         # Solve (t_a/g) * x ≡ (t_b/g) (mod ord_a) in <5>
@@ -2731,14 +2781,14 @@ def _discrete_log_mod_prime_power(a: int, b: int, p: int, e: int) -> tuple[int, 
 
         # Enforce sign parity constraint (-1)^{s_a*x} = (-1)^{s_b}
         if (s_a == 0 and s_b != 0) or (s_a == 1 and (x % 2) != s_b):
-            raise NoSolutionError("No solution exists")
+            raise _NoSolutionError("No solution exists")
 
         return x, ord_a
 
     # Solve a^x = b in the cyclic subgroup <a> ≤ (Z/qZ)×
     ord_a = _multiplicative_order_mod_odd_prime_power(a, p, e)
     if pow(b, ord_a, q) != 1:
-        raise NoSolutionError("No solution exists")  # b is not in <a>
+        raise _NoSolutionError("No solution exists")  # b is not in <a>
 
     return _pohlig_hellman(a, b, q, ord_a), ord_a
 
@@ -2755,14 +2805,14 @@ def _pohlig_hellman(g: int, h: int, mod: int, order: int) -> int:
 
     # Validate that g and h lie in the claimed subgroup
     if pow(g, order, mod) != 1 or pow(h, order, mod) != 1:
-        raise NoSolutionError("No solution exists")
+        raise _NoSolutionError("No solution exists")
 
     # Handle special case of trivial subgroup
     if order == 1:
         if h == 1 % mod:
             return 0
         else:
-            raise NoSolutionError("No solution exists")
+            raise _NoSolutionError("No solution exists")
 
     # Solve g^x = h in each Sylow subgroup of <g> with order p^e
     congruences = []
@@ -2822,7 +2872,7 @@ def _bsgs(g: int, h: int, mod: int, p: int) -> int:
     if p == 2:
         if h == 1 % mod: return 0
         if h == g % mod: return 1
-        raise NoSolutionError("No solution in order-2 subgroup")
+        raise _NoSolutionError("No solution in order-2 subgroup")
 
     table, m, g_m_inv = _bsgs_table(g % mod, mod, p)
     y = h % mod
@@ -2833,7 +2883,7 @@ def _bsgs(g: int, h: int, mod: int, p: int) -> int:
         else:
             y = (y * g_m_inv) % mod
 
-    raise NoSolutionError("No solution found (BSGS)")
+    raise _NoSolutionError("No solution found (BSGS)")
 
 @small_cache
 def _bsgs_table(g: int, mod: int, p: int) -> tuple[dict[int, int], int, int]:
@@ -2855,13 +2905,13 @@ def _pollard_rho_log(g: int, h: int, mod: int, p: int, partition_size: int = 32)
 
     Complexity
     ----------
-    O(√p) multiplications and O(1) space
+    Las Vegas with expected O(√p) multiplications and O(1) space
     """
     g, h = g % mod, h % mod
 
     # Validate that g and h lie in the claimed subgroup
     if pow(g, p, mod) != 1 or pow(h, p, mod) != 1:
-        raise NoSolutionError("No solution exists")
+        raise _NoSolutionError("No solution exists")
 
     partition_size = 1 << (partition_size - 1).bit_length()
     mask = partition_size - 1
@@ -2926,7 +2976,7 @@ def _modular_roots_mod_prime(n: int, k: int, p: int) -> tuple[int, ...]:
         try:
             r = _tonelli_shanks(n, p)
             return (r, -r % p)
-        except NoSolutionError:
+        except _NoSolutionError:
             return ()
 
     # Use the generalized Euler criterion to test for the existence of a k-th root
@@ -2996,7 +3046,7 @@ def _tonelli_shanks(n: int, p: int) -> int:
         if r*r % p == n:
             return r
         else:
-            raise NoSolutionError("No solution exists")
+            raise _NoSolutionError("No solution exists")
 
     # Write p - 1 as 2^s * q with q odd (by factoring out powers of 2)
     s, q = 0, p - 1
@@ -3021,7 +3071,7 @@ def _tonelli_shanks(n: int, p: int) -> int:
             i += 1
 
         if i >= M:
-            raise NoSolutionError("No solution exists")
+            raise _NoSolutionError("No solution exists")
 
         b = pow(c, 2**(M-i-1), p)  # root of unity of order 2^(i+1)
         M = i  # ord(t) = 2^M
@@ -3053,7 +3103,7 @@ def _adleman_manders_miller(delta: int, r: int, p: int) -> int:
 
     # Use the generalized Euler criterion to test for the existence of an r-th root
     if pow(delta, (p - 1) // r, p) != 1:
-        raise NoSolutionError("No solution exists")
+        raise _NoSolutionError("No solution exists")
 
     # Write p - 1 = r^t * s with gcd(r, s) = 1
     t, s = 0, p - 1
@@ -3517,198 +3567,6 @@ def _berggren() -> Iterator[tuple[int, int, int]]:
 
 
 ########################################################################
-############################ Linear Algebra ############################
-########################################################################
-
-Matrix: TypeAlias = list[list[Number]]
-Vector: TypeAlias = list[Number]
-
-def linear_solve(A: Matrix, b: Vector) -> Vector | None:
-    """
-    Solve the system of linear equations given by Ax = b.
-
-    Uses the Bareiss algorithm on integer matrices, and Gauss-Jordan elimination
-    otherwise.
-
-    Parameters
-    ----------
-    A : Matrix
-        M × N matrix of coefficients
-    b : Vector
-        List of M values
-    """
-    if len(A) != len(b): raise ValueError("Matrix dimensions do not match")
-    if not A: return [] if not b else None
-
-    # Get reduced row-echelon form of augmented matrix [A | b]
-    augmented_matrix = [[*coefs, value] for coefs, value in zip(A, b)]
-    if all(isinstance(item, int) for row in augmented_matrix for item in row):
-        rref = _bareiss(augmented_matrix)
-    else:
-        rref = _gauss_jordan(augmented_matrix)
-
-    # Validate solution
-    num_variables = len(A[0])
-    pivot_value_by_col, pivot_cols = {}, set()
-    for row in rref:
-        lead = None
-        for i in range(num_variables):
-            if not is_zero(row[i]):
-                lead = i
-                break
-
-        if lead is None:
-            if not is_zero(row[-1]):
-                return None  # no solution
-        else:
-            pivot_cols.add(lead)
-            pivot_value_by_col[lead] = row[-1]
-
-    if len(pivot_cols) < num_variables:
-        return None  # infinite solutions
-
-    return [pivot_value_by_col[i] for i in range(num_variables)]
-
-def identity_matrix(n: int) -> Matrix:
-    """
-    Return the n × n identity matrix.
-    """
-    return [[int(i == j) for j in range(n)] for i in range(n)]
-
-def matrix_apply(function: Callable[[Number], Number], A: Matrix) -> Matrix:
-    """
-    Apply a function elementwise to a matrix A.
-    """
-    return [[function(x) for x in row] for row in A]
-
-def matrix_transpose(A: Matrix) -> Matrix:
-    """
-    Return the transpose of matrix A.
-    """
-    return [list(col) for col in zip(*A)]
-
-def matrix_sum(A: Matrix, B: Matrix) -> Matrix:
-    """
-    Return A + B.
-    """
-    return _matrix_binary_op(A, B, op=lambda a, b: a + b)
-
-def matrix_difference(A: Matrix, B: Matrix) -> Matrix:
-    """
-    Return A - B.
-    """
-    return _matrix_binary_op(A, B, op=lambda a, b: a - b)
-
-def matrix_product(A: Matrix, B: Matrix) -> Matrix:
-    """
-    Return the product of two matrices A and B.
-    """
-    if len(A[0]) != len(B): raise ValueError("Matrix dimensions do not match")
-    return [[sum(a*b for a, b in zip(row, col)) for col in zip(*B)] for row in A]
-
-def _matrix_binary_op(
-    A: Matrix,
-    B: Matrix,
-    op: Callable[[Number, Number], Number],
-) -> Matrix:
-    """
-    Apply a binary operation elementwise to two matrices A and B.
-    """
-    if len(A) != len(B) or len(A[0]) != len(B[0]):
-        raise ValueError("Matrix dimensions do not match")
-
-    return [[op(a, b) for a, b in zip(row_a, row_b)] for row_a, row_b in zip(A, B)]
-
-def _gauss_jordan(A: Matrix) -> Matrix:
-    """
-    Gauss-Jordan elimination. Returns the given matrix in reduced row-echelon form.
-
-    Complexity
-    ----------
-    O(m²n) time for an m × n matrix
-    """
-    num_rows, num_cols = len(A), len(A[0])
-    row = col = 0
-    while row < num_rows and col < num_cols - 1:
-        # Find pivot in current column
-        pivot_row = max(range(row, num_rows), key=lambda r: abs(A[r][col]))
-        if is_zero(A[pivot_row][col]):
-            col += 1
-            continue
-
-        # Move pivot row into position and normalize it
-        A[row], A[pivot_row] = A[pivot_row], A[row]
-        pivot = A[row][col]
-        A[row] = [value / pivot for value in A[row]]
-
-        # Eliminate the current column from all other rows
-        for r in range(num_rows):
-            if r == row: continue
-            if (k := A[r][col]) == 0: continue
-            A[r] = [value - k * pivot_value for value, pivot_value in zip(A[r], A[row])]
-
-        row += 1
-        col += 1
-
-    return A
-
-def _bareiss(A: Matrix) -> Matrix:
-    """
-    Bareiss algorithm (fraction-free Gaussian elimination).
-    Returns the matrix in row-echelon form using only integer arithmetic.
-
-    Unlike Gauss-Jordan, rows are NOT normalized (leading coefficients may not be 1).
-    This avoids floating-point errors for integer matrices.
-
-    See: https://www.ams.org/journals/mcom/1968-22-103/S0025-5718-1968-0226829-0/
-
-    Complexity
-    ----------
-    O(m²n) time for an m × n matrix
-    """
-    num_rows, num_cols = len(A), len(A[0])
-    prev_pivot = 1
-    pivot_row = 0
-
-    for col in range(num_cols - 1):
-        if pivot_row >= num_rows:
-            break
-
-        # Find non-zero pivot in current column
-        pivot_idx = None
-        for r in range(pivot_row, num_rows):
-            if A[r][col] != 0:
-                pivot_idx = r
-                break
-
-        if pivot_idx is None:
-            continue
-
-        # Swap pivot row into position
-        A[pivot_row], A[pivot_idx] = A[pivot_idx], A[pivot_row]
-        pivot = A[pivot_row][col]
-
-        # Eliminate below (and above for RREF-like form)
-        for r in range(num_rows):
-            if r == pivot_row: continue
-            if A[r][col] == 0: continue
-            factor = A[r][col]
-            for c in range(num_cols):
-                A[r][c] = (A[r][c] * pivot - A[pivot_row][c] * factor) // prev_pivot
-
-        prev_pivot = pivot
-        pivot_row += 1
-
-    # Normalize rows by leading coefficient
-    for row in A:
-        if (lead := next((x for x in row if x), None)) is None: continue
-        row[:] = [v // lead if v % lead == 0 else Fraction(v, lead) for v in row]
-
-    return A
-
-
-
-########################################################################
 ############################ Combinatorics #############################
 ########################################################################
 
@@ -4043,7 +3901,7 @@ def fibonacci_index(n: int) -> int:
         Upper bound on Fibonacci number
     """
     if n < 0:
-        raise ValueError("The value of `n` must be greater than 0.")
+        raise ValueError("Must have n >= 0")
     if n == 0:
         return 0
     if n == 1:
@@ -4135,6 +3993,247 @@ def is_polygonal(s: int, n: int) -> bool:
 
 
 ########################################################################
+############################ Linear Algebra ############################
+########################################################################
+
+def linear_solve(A: Matrix, b: Vector) -> Vector | None:
+    """
+    Solve the system of linear equations given by Ax = b.
+
+    Uses the Bareiss algorithm on integer matrices, and Gauss-Jordan elimination
+    otherwise. For underdetermined systems, returns a particular solution
+    (with free variables set to 0). Use nullspace(A) to get the homogeneous part.
+
+    Parameters
+    ----------
+    A : Matrix
+        M × N matrix of coefficients
+    b : Vector
+        List of M values
+
+    Returns
+    -------
+    Vector or None
+        A solution vector x such that Ax = b, or None if no solution exists.
+    """
+    if len(A) != len(b): raise ValueError("Matrix dimensions do not match")
+    if not A: return [] if not b else None
+
+    # Get reduced row-echelon form of augmented matrix [A | b]
+    augmented_matrix = [[*coefs, value] for coefs, value in zip(A, b)]
+    if all(isinstance(item, int) for row in augmented_matrix for item in row):
+        rref = _bareiss(augmented_matrix)
+    else:
+        rref = _gauss_jordan(augmented_matrix)
+
+    # Validate solution
+    num_variables = len(A[0])
+    pivot_value_by_col, pivot_cols = {}, set()
+    for row in rref:
+        lead = None
+        for i in range(num_variables):
+            if not is_zero(row[i]):
+                lead = i
+                break
+
+        if lead is None:
+            if not is_zero(row[-1]):
+                return None  # no solution
+        else:
+            pivot_cols.add(lead)
+            pivot_value_by_col[lead] = row[-1]
+
+    return [pivot_value_by_col.get(i, 0) for i in range(num_variables)]
+
+def nullspace(A: Matrix) -> list[Vector]:
+    """
+    Return a basis for the null space of A (the kernel of the linear map).
+    This is the set of all vectors x such that Ax = 0.
+
+    Parameters
+    ----------
+    A : Matrix
+        M × N matrix
+
+    Returns
+    -------
+    null_basis : list[Vector]
+        Basis vectors for the null space. 
+        Returns an empty list if only the trivial solution exists.
+    """
+    if not A: return []
+
+    num_cols = len(A[0])
+
+    # Get reduced row-echelon form
+    matrix = [row[:] for row in A]
+    if all(isinstance(x, int) for row in matrix for x in row):
+        rref = _bareiss(matrix)
+    else:
+        rref = _gauss_jordan(matrix)
+
+    # Find pivot columns
+    pivot_col_to_row = {}
+    for row_idx, row in enumerate(rref):
+        for i in range(num_cols):
+            if not is_zero(row[i]):
+                pivot_col_to_row[i] = row_idx
+                break
+
+    free_cols = [j for j in range(num_cols) if j not in pivot_col_to_row]
+
+    # Build null space basis (one vector per free variable)
+    basis = []
+    for free_col in free_cols:
+        vec = [0] * num_cols
+        vec[free_col] = 1
+        for pivot_col, row_idx in pivot_col_to_row.items():
+            vec[pivot_col] = -rref[row_idx][free_col]
+        basis.append(vec)
+
+    return basis
+
+def identity_matrix(n: int) -> Matrix:
+    """
+    Return the n × n identity matrix.
+    """
+    return [[int(i == j) for j in range(n)] for i in range(n)]
+
+def matrix_apply(function: Callable[[Number], Number], A: Matrix) -> Matrix:
+    """
+    Apply a function elementwise to a matrix A.
+    """
+    return [[function(x) for x in row] for row in A]
+
+def matrix_transpose(A: Matrix) -> Matrix:
+    """
+    Return the transpose of matrix A.
+    """
+    return [list(col) for col in zip(*A)]
+
+def matrix_sum(A: Matrix, B: Matrix) -> Matrix:
+    """
+    Return A + B.
+    """
+    return _matrix_binary_op(A, B, op=lambda a, b: a + b)
+
+def matrix_difference(A: Matrix, B: Matrix) -> Matrix:
+    """
+    Return A - B.
+    """
+    return _matrix_binary_op(A, B, op=lambda a, b: a - b)
+
+def matrix_product(A: Matrix, B: Matrix) -> Matrix:
+    """
+    Return the product of two matrices A and B.
+    """
+    if len(A[0]) != len(B): raise ValueError("Matrix dimensions do not match")
+    return [[sum(a*b for a, b in zip(row, col)) for col in zip(*B)] for row in A]
+
+def _matrix_binary_op(
+    A: Matrix,
+    B: Matrix,
+    op: Callable[[Number, Number], Number],
+) -> Matrix:
+    """
+    Apply a binary operation elementwise to two matrices A and B.
+    """
+    if len(A) != len(B) or len(A[0]) != len(B[0]):
+        raise ValueError("Matrix dimensions do not match")
+
+    return [[op(a, b) for a, b in zip(row_a, row_b)] for row_a, row_b in zip(A, B)]
+
+def _gauss_jordan(A: Matrix) -> Matrix:
+    """
+    Gauss-Jordan elimination. Returns the given matrix in reduced row-echelon form.
+
+    Complexity
+    ----------
+    O(m²n) time for an m × n matrix
+    """
+    num_rows, num_cols = len(A), len(A[0])
+    row = col = 0
+    while row < num_rows and col < num_cols - 1:
+        # Find pivot in current column
+        pivot_row = max(range(row, num_rows), key=lambda r: abs(A[r][col]))
+        if is_zero(A[pivot_row][col]):
+            col += 1
+            continue
+
+        # Move pivot row into position and normalize it
+        A[row], A[pivot_row] = A[pivot_row], A[row]
+        pivot = A[row][col]
+        A[row] = [value / pivot for value in A[row]]
+
+        # Eliminate the current column from all other rows
+        for r in range(num_rows):
+            if r == row: continue
+            if (k := A[r][col]) == 0: continue
+            A[r] = [value - k * pivot_value for value, pivot_value in zip(A[r], A[row])]
+
+        row += 1
+        col += 1
+
+    return A
+
+def _bareiss(A: Matrix) -> Matrix:
+    """
+    Bareiss algorithm (fraction-free Gaussian elimination).
+    Returns the matrix in row-echelon form using exact arithmetic.
+
+    Unlike Gauss-Jordan, rows are NOT normalized until the end,
+    and are returned as int or Fraction types. This avoids floating-point
+    errors for integer matrices.
+
+    See: https://www.ams.org/journals/mcom/1968-22-103/S0025-5718-1968-0226829-0/
+
+    Complexity
+    ----------
+    O(m²n) time for an m × n matrix
+    """
+    num_rows, num_cols = len(A), len(A[0])
+    prev_pivot = 1
+    pivot_row = 0
+
+    for col in range(num_cols - 1):
+        if pivot_row >= num_rows:
+            break
+
+        # Find non-zero pivot in current column
+        pivot_idx = None
+        for r in range(pivot_row, num_rows):
+            if A[r][col] != 0:
+                pivot_idx = r
+                break
+
+        if pivot_idx is None:
+            continue
+
+        # Swap pivot row into position
+        A[pivot_row], A[pivot_idx] = A[pivot_idx], A[pivot_row]
+        pivot = A[pivot_row][col]
+
+        # Eliminate below (and above for RREF-like form)
+        for r in range(num_rows):
+            if r == pivot_row: continue
+            if A[r][col] == 0: continue
+            factor = A[r][col]
+            for c in range(num_cols):
+                A[r][c] = (A[r][c] * pivot - A[pivot_row][c] * factor) // prev_pivot
+
+        prev_pivot = pivot
+        pivot_row += 1
+
+    # Normalize rows by leading coefficient
+    for row in A:
+        if (lead := next((x for x in row if x), None)) is None: continue
+        row[:] = [v // lead if v % lead == 0 else Fraction(v, lead) for v in row]
+
+    return A
+
+
+
+########################################################################
 ############################## Utilities ###############################
 ########################################################################
 
@@ -4205,7 +4304,7 @@ def permutation(n: int, master_key: bytes | None = None) -> Iterator[int]:
         yield 0
         return
 
-    # Derive num_rounds * 32 bytes of round-key material with HKDF-SHA256
+    # Derive num_rounds * 32 bytes of round-key material
     master_key = secrets.token_bytes(32) if master_key is None else master_key
     keys = tuple(
         hmac.digest(master_key, b'feistel-round' + i.to_bytes(4, 'big'), hashlib.sha256)
@@ -4570,33 +4669,78 @@ def digit_permutations(n: int) -> Iterator[int]:
 ############################## Constants ###############################
 ########################################################################
 
-@small_cache
 def _get_pool() -> multiprocessing.pool.Pool | None:
-    """
-    Get or create the persistent multiprocessing pool.
-    """
-    try:
-        context = multiprocessing.get_context('forkserver')
-    except ValueError:
-        context = multiprocessing.get_context()
-
     if getattr(multiprocessing.process.current_process(), '_inheriting', False):
         return None
     if multiprocessing.process.current_process()._config.get('daemon'):
         return None
 
-    pool = context.Pool(processes=min(8, multiprocessing.cpu_count()))
-    def shutdown_pool():
-        try:
-            pool.terminate()  # kill workers immediately
-            pool.join()
-        except Exception as e:
-            pass
+    pool = None
+    state, touch = _get_pool_state()
+    with state['lock']:
+        if state['pid'] != os.getpid():
+            state['pid'], state['pool'] = os.getpid(), None
+            timer = state.get('timer')
+            if timer:
+                try: timer.cancel()
+                except Exception: pass
+            state['timer'] = None
 
-    atexit.register(shutdown_pool)
+        pool = state.get('pool')
+        if not pool or getattr(pool, '_state', None) != multiprocessing.pool.RUN:
+            num_processes = min(8, multiprocessing.cpu_count())
+            pool = state['pool'] = state['context'].Pool(processes=num_processes)
+
+    touch()
     return pool
 
-@small_cache
+@singleton
+def _get_pool_state():
+    try:
+        context = multiprocessing.get_context('forkserver')
+    except ValueError:
+        context = multiprocessing.get_context()
+
+    state = {
+        'pid': os.getpid(),
+        'context': context,
+        'pool': None,
+        'timer': None,
+        'lock': threading.Lock(),
+    }
+
+    def shutdown():
+        with state['lock']:
+            timer, pool = state.get('timer'), state.get('pool')
+            state['timer'] = None
+            state['pool'] = None
+            if timer:
+                try: timer.cancel()
+                except Exception: pass
+            if pool:
+                try:
+                    pool.terminate()
+                    pool.join()
+                except Exception:
+                    pass
+
+    def touch():
+        with state['lock']:
+            if state.get('pool') is None:
+                return
+            timer = state.get('timer')
+            if timer:
+                try: timer.cancel()
+                except Exception: pass
+            timer = threading.Timer(600, shutdown)
+            timer.daemon = True
+            state['timer'] = timer
+            timer.start()
+
+    atexit.register(shutdown)
+    return state, touch
+
+@singleton
 def _int_str_mod() -> int:
     """
     Return safe modulus (10^n) for chunking integers during string conversion.
