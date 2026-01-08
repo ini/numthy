@@ -14,9 +14,7 @@ import itertools
 import multiprocessing
 import os
 import secrets
-import string
 import sys
-import threading
 
 from collections import Counter, defaultdict, deque
 from collections.abc import Sequence
@@ -25,6 +23,7 @@ from functools import lru_cache, partial, reduce
 from heapq import heappop, heappush
 from math import factorial, gcd, inf, isqrt, lcm, log, prod, sqrt
 from operator import mul, sub, xor
+from threading import Lock, Timer
 from typing import Any, Callable, Hashable, Iterable, Iterator, TypeAlias
 
 
@@ -1047,7 +1046,7 @@ def _count_distinct_prime_factors(n: int) -> int | None:
 
 def _partial_factorization(
     n: int,
-    small_primes: Iterable[int]
+    small_primes: Iterable[int],
 ) -> tuple[dict[int, int], int]:
     """
     Factor n with respect to a set of primes.
@@ -1056,11 +1055,18 @@ def _partial_factorization(
     """
     partial_pf = {}
     for p in small_primes:
-        if n == 1:
-            break
-        while n % p == 0:
-            n //= p
-            partial_pf[p] = partial_pf.get(p, 0) + 1
+        if n % p: continue  # n not divisible by p
+        n, e = n // p, 1  # n divisible by p, exponent is at least 1
+        while True:
+            quotient, remainder = divmod(n, p)
+            if remainder: break  # n no longer divisible by p
+            n, e = quotient, e + 1
+
+        partial_pf[p] = e
+        if p*p > n: break  # only check termination when we've actually done division
+
+    if n in small_primes:
+        partial_pf[n] = n = 1
 
     return partial_pf, n
 
@@ -1089,8 +1095,9 @@ def _brent(
         return 5
 
     # With starting point y = 2 and polynomial of the form f(x) = x^2 + c,
-    # for any positive n != 25, it can be proven that there exists some
-    # 0 < c < √n - 1 that finds a nontrivial factor on the very first GCD check.
+    # for odd composite n != 25, there is an elementary proof that there exists some
+    # 0 < c < √n - 1 that finds a nontrivial factor on the very first GCD check
+    # Let x0 = 2, c = p - 2 with p | n and p <= √n, and consider gcd(n, f(f(x0)) - x0).
     # The expected time remains the same, but this gives us a deterministic upper bound.
     random_permutation, iteration_schedule = None, None
     if max_attempts is None:
@@ -1527,7 +1534,7 @@ def _siqs(
     n: int,
     B: int | None = None,
     M: int | None = None,
-    large_prime_multiplier: int | None = None,
+    large_prime_bound_multiplier: int | None = None,
     max_polynomial_count: int | None = None,
 ) -> int:
     """
@@ -1563,10 +1570,10 @@ def _siqs(
         ]
         M = _threshold_select(bits, M_thresholds, 220000)
 
-    # Adaptively set large prime multiplier based on input size
-    if large_prime_multiplier is None:
-        lpm_thresholds = [(120, 8), (132, 10), (144, 12), (160, 14)]
-        large_prime_multiplier = _threshold_select(bits, lpm_thresholds, 16)
+    # Adaptively set large prime bound multiplier based on input size
+    if large_prime_bound_multiplier is None:
+        lpbm_thresholds = [(120, 8), (132, 10), (144, 12), (160, 14)]
+        large_prime_bound_multiplier = _threshold_select(bits, lpbm_thresholds, 16)
 
     # Adaptively set max number of polynomials to use based on input size
     if max_polynomial_count is None:
@@ -1578,13 +1585,13 @@ def _siqs(
     factor_base = _build_factor_base(n, B)
     if not factor_base: return 1  # failure, no valid factor base
     min_relation_count = len(factor_base) + 30
-    L = B * large_prime_multiplier  # large prime bound
+    L = B * large_prime_bound_multiplier  # large prime bound
     relations, lucky_factor = _collect_relations(
         n, factor_base, B, L, M, min_relation_count, max_polynomial_count)
 
     # Check early termination conditions
     if lucky_factor is not None:
-        return lucky_factor  # success, gcd(lp, n) was non-trivial
+        return lucky_factor  # success, one of the large primes was a factor
     if len(relations) < len(factor_base):
         return 1  # failure, null space will be trivial
 
@@ -1637,8 +1644,8 @@ def _gen_polynomials(
     M: int,
 ) -> Iterator[tuple[int, int]]:
     """
-    Generate SIQS polynomials Q(x) = (Ax + B)^2 - n,
-    where A ≈ √(2n)/M is the product of k primes and B satisfies B^2 ≡ n (mod A).
+    Generate SIQS polynomials Q(x) = (Ax + b)^2 - n,
+    where A ≈ √(2n)/M is the product of k primes and b satisfies b^2 ≡ n (mod A).
     """
     sqrt_n = isqrt(n)
     target_A = max(isqrt(2*n) // M, 2)
@@ -1650,29 +1657,29 @@ def _gen_polynomials(
 
     # Choose k so target_A^(1/k) falls within prime range
     k = ilog(target_A - 1, pool_primes[-1]) + 1  # ⌈log_{p_max}(target_A)⌉
-    k = max(3, min(k, 8, len(pool)))
+    k = max(2, min(k, len(pool)))
 
     # Narrow pool to primes near ideal size
     ideal = iroot(target_A, k)
     center = bisect.bisect_left(pool_primes, ideal)
     half_width = min(max(200, len(pool) // 5), 1200)  # heuristic window half-size
     pool = pool[max(0, center - half_width):center+half_width] or pool
+    pool = pool if len(pool) >= k else factor_base
 
-    # Set acceptance bounds [low, high] for A
+    # Set acceptance bounds [low, high] for A (only if achievable)
+    low, high = 1, inf
     if target_A > 10000:
+        min_A = prod(p for p, _, _ in sorted(pool, key=lambda x: x[0])[:k])
         band = 25 if target_A >= 10**12 else 15
-        low, high = max(2, target_A // band), target_A * band
-    else:
-        low, high = 1, inf
+        if min_A <= target_A * band:
+            low, high = max(2, target_A // band), target_A * band
 
     # Generate polynomials
     rng, seen = secrets.SystemRandom(), set()
     while True:
         # Set A as the product of k randomly sampled primes from the pool
-        source = pool if len(pool) >= k else factor_base
-        sample = sorted(rng.sample(source, k), key=lambda x: x[0])
-        sample_primes, _, sample_roots = zip(*sample)
-        A = prod(sample_primes)
+        sample = sorted(rng.sample(pool, k), key=lambda x: x[0])
+        A = prod(p for p, _, _ in sample)
 
         # Reject duplicates and out-of-bounds A values
         if A < low or A > high or A in seen: continue
@@ -1680,15 +1687,39 @@ def _gen_polynomials(
         if len(seen) > 20000:
             seen.clear()
 
-        # For each prime p in A, we have two modular roots (±r)^2 = n (mod p)
-        # Try all sign combinations and use CRT to get B^2 ≡ n (mod A)
-        for signs in itertools.product((1, -1), repeat=k-1):
-            signs = (1,) + signs
-            residues = [s*r % p for s, r, p in zip(signs, sample_roots, sample_primes)]
-            B = crt(residues, sample_primes)
-            if B is not None:
-                # Shift B closer to √n for more efficient sieving (i.e. |Q(x)| small)
-                yield A, B + A * ((sqrt_n - B) // A)
+        # For each prime p | A, we have two modular roots (±r)^2 = n (mod p)
+        # Fix the 1st sign (no ± b duplicates) and set the others to get b^2 ≡ n (mod A)
+        # B_i ≡ r_i (mod p_i), B_i ≡ 0 (mod other primes) via CRT
+        # so sum(B_i) is the CRT solution for all residues r (mod p_i).
+        B = [(A // p) * ((root * pow(A // p, -1, p)) % p) for p, _, root in sample]
+
+        # Shift b-values closer to √n for more efficient sieving (i.e. |Q(x)| small)
+        shift = lambda b: b + A * ((sqrt_n - b) // A)
+
+        # Enumerate all 2^(k-1) sign combinations via Gray code
+        b = sum(B) % A  # base solution
+        yield A, shift(b)
+        for i in range(1, 1 << (k - 1)):
+            j = (i & -i).bit_length()
+            sign = 1 if ((i >> j) & 1) else -1
+            b = (b + 2 * sign * B[j]) % A  # flip sign of component j
+            yield A, shift(b)
+
+@lru_cache(maxsize=256)
+def _byte_subtraction_table(d: int) -> bytes:
+    """
+    Translation table for byte subtraction.
+    Maps byte v to max(0, v - d).
+    """
+    return bytes(max(0, v - d) for v in range(256))
+
+@lru_cache(maxsize=256)
+def _byte_threshold_table(threshold: int) -> bytes:
+    """
+    Translation table for threshold filtering.
+    Maps byte v to True if v <= threshold, otherwise to False.
+    """
+    return bytes(True if v <= threshold else False for v in range(256))
 
 def _sieve_polynomial(
     n: int,
@@ -1706,10 +1737,13 @@ def _sieve_polynomial(
     # Set smoothness threshold ~ max|Q(x)|
     max_abs_Q = max(abs((-A*M + B)**2 - n), abs((A*M + B)**2 - n))
     base_log = log(max_abs_Q) if max_abs_Q > 1 else 1.0
-    threshold = base_log * 0.55
+    threshold = 0.55 * base_log  # higher than usual to account for skipping p < 30
 
-    # Initialize sieve
-    sieve = [base_log] * length
+    # Initialize sieve as bytearray
+    # Scale logs to fit in a byte (0-255), where base_log -> 255 is the max byte
+    sieve = bytearray([255]) * length
+    scale = 255 / base_log
+    threshold = round(threshold * scale)
 
     # Sieve with factor base
     # Skip small primes (which will still be checked later when factoring Q(x))
@@ -1717,21 +1751,25 @@ def _sieve_polynomial(
         if A % p == 0 or p < 30:
             continue
 
+        # Translation table for subtracting log(p) at byte-scale
+        table = _byte_subtraction_table(round(log_p * scale))
+
         # Mark all x where Q(x) = 0 (mod p)
         inv_A = pow(A, -1, p)
-        logp = itertools.repeat(log_p)
-        for x in {((root - B) * inv_A) % p, ((-root - B) * inv_A) % p}:
-            start = (x - offset) % p
-            sieve[start::p] = map(sub, sieve[start::p], logp)  # subtract log(p)
+        x1, x2 = ((root - B) * inv_A) % p, ((-root - B) * inv_A) % p
+        start = (x1 - offset) % p
+        sieve[start::p] = sieve[start::p].translate(table)
+        if x2 != x1:
+            start = (x2 - offset) % p
+            sieve[start::p] = sieve[start::p].translate(table)
 
     # Yield only candidates that pass the smoothness threshold
-    # (i.e. sieve value is small)
-    for i, value in enumerate(sieve):
-        if value <= threshold:
-            y = A * (offset + i) + B
-            Q = y * y - n
-            if Q != 0:
-                yield Q, y
+    mask = sieve.translate(_byte_threshold_table(threshold))
+    for i in itertools.compress(range(length), mask):
+        y = A * (offset + i) + B
+        Q = y * y - n
+        if Q != 0:
+            yield Q, y
 
 def _collect_relations(
     n: int,
@@ -1754,11 +1792,16 @@ def _collect_relations(
         A non-trivial factor of n if found during collection, otherwise None
     """
     factor_base_primes, _, _ = zip(*factor_base)
-    possible_large_primes = list(primes(low=B+1, high=large_prime_bound))
+    possible_lp = list(primes(low=B+1, high=large_prime_bound))
 
     # Generate and sieve polynomials for relations
-    relations, partial_relations = {}, {}
+    relations, partials = {}, []  # partials is a list of (X, pf, large_primes) tuples
     polynomial_generator = _gen_polynomials(n, factor_base, M)
+
+    # Streaming GF(2) elimination on large-prime parity vectors.
+    # Each partial contributes a sparse column with bits at its large primes (mod 2).
+    # When a column reduces to 0, we've found a dependency whose large primes cancel.
+    lp_index, lp_pivots, lp_masks = {}, {}, {}
     for A, Bp in itertools.islice(polynomial_generator, max_polynomial_count):
         for Q, y in _sieve_polynomial(n, factor_base, A, Bp, M):
             # Factor Q over the factor base
@@ -1766,30 +1809,58 @@ def _collect_relations(
             pf[-1] = 1 if Q < 0 else 0  # account for sign with -1 factor
 
             # Handle large prime variants
-            large_primes = _get_large_primes(residual, possible_large_primes)
+            large_primes = _get_large_primes(residual, possible_lp)
             if large_primes is None:
                 continue  # unusable
-            elif large_primes == ():
+            elif not large_primes:
                 relations.setdefault(y % n, pf)  # smooth
             else:
-                # Check if gcd of large primes with n yields a non-trivial factor
-                large_prime_product = prod(large_primes)
-                if 1 < (g := gcd(large_prime_product, n)) < n:
+                # Check if any large primes are factors of n
+                if 1 < (g := gcd(prod(large_primes), n)) < n:
                     return [], g
+                elif g == n:
+                    return [], next(p for p in large_primes if n % p == 0)
 
-                # If we find two partials (X1)^2 = Q1 (mod n) and (X2)^2 = Q2 (mod n)
-                # with the same large primes with product d, then we can combine them
-                # and (X1 * X2 * d^(-1))^2 = (Q1/d) * (Q2/d) (mod n) is smooth
-                X1 = y % n
-                if large_primes in partial_relations:
-                    X2, partial_pf = partial_relations.pop(large_primes)
-                    for p, e in partial_pf.items():
-                        pf[p] = pf.get(p, 0) + e
+                # Add this partial and try to eliminate large primes (mod 2)
+                partials.append((y % n, pf, large_primes))
 
-                    X = (X1 * X2 * pow(large_prime_product, -1, n)) % n
-                    relations.setdefault(X, pf)
-                else:
-                    partial_relations[large_primes] = (X1, pf)
+                # Build parity vector (bitset) for the large-prime multiset
+                parity_vector = 0
+                for p in large_primes:
+                    parity_vector ^= 1 << lp_index.setdefault(p, len(lp_index))
+
+                # Gaussian elimination over GF(2) on the implicit matrix
+                # where each row is a partial (indexed by bit position in combo)
+                # and each column is a large prime (indexed by lp_index)
+                combo = 1 << (len(partials) - 1)
+                while parity_vector:
+                    lead = parity_vector.bit_length() - 1
+                    if lead not in lp_pivots:
+                        lp_pivots[lead], lp_masks[lead] = parity_vector, combo
+                        break
+                    parity_vector ^= lp_pivots[lead]
+                    combo ^= lp_masks[lead]
+
+                # If v = 0, combo encodes a subset of partials where all large primes
+                # occur an even number of times (i.e. their product is a square)
+                if parity_vector == 0:
+                    # Combine the dependency subset: large primes cancel to a square
+                    pf_combined, lp_counts, X_prod = {}, {}, 1
+                    while combo:
+                        X, pf, lps = partials[(combo & -combo).bit_length() - 1]
+                        X_prod = (X_prod * X) % n
+                        for p, e in pf.items():
+                            pf_combined[p] = pf_combined.get(p, 0) + e
+                        for p in lps:
+                            lp_counts[p] = lp_counts.get(p, 0) + 1
+                        combo &= combo - 1
+
+                    # D = sqrt of large-prime part = prod p^(count/2) (mod n)
+                    D = 1
+                    for p, count in lp_counts.items():
+                        D = D * pow(p, count >> 1, n) % n
+
+                    relations.setdefault((X_prod * pow(D, -1, n)) % n, pf_combined)
 
             if len(relations) >= min_relation_count:
                 return list(relations.items()), None
@@ -1799,11 +1870,11 @@ def _collect_relations(
 def _get_large_primes(
     v: int,
     possible_large_primes: Sequence[int],
-    max_large_prime_count: int = 2,
+    max_count: int = 3,
 ) -> tuple[int, ...] | None:
     """
     Factor residue v into large primes.
-    Returns tuple of up to `max_large_prime_count` primes if v factors completely
+    Returns tuple of up to `max_count` primes if v factors completely
     over `possible_large_primes`, otherwise returns None.
     """
     if not possible_large_primes:
@@ -1814,7 +1885,7 @@ def _get_large_primes(
         return ()
     if v <= L:
         return (v,) if is_prime(v) else None
-    if max_large_prime_count <= 1:
+    if max_count <= 1:
         return None
 
     # Try to extract a large prime factor and recurse
@@ -1822,7 +1893,7 @@ def _get_large_primes(
         if p * p > v: break
         if v % p == 0:
             rest = _get_large_primes(
-                v // p, possible_large_primes, max_large_prime_count - 1)
+                v // p, possible_large_primes, max_count - 1)
             if rest is not None:
                 return tuple(sorted((p,) + rest))
 
@@ -2312,7 +2383,7 @@ def primitive_root(n: int) -> int | None:
     """
     Find a primitive root modulo n.
 
-    Use the Itoh-Bach algorithm to search for candidates.
+    Use Bach's primitive root finding algorithm to search for candidates.
 
     Parameters
     ----------
@@ -2505,8 +2576,8 @@ def _bach(
     max_tries: int = 64,
 ) -> int:
     """
-    Use the Itoh-Bach algorithm to search for a primitive root modulo p,
-    where p is prime.
+    Use Bach's primitive root finding algorithm to search for
+    a primitive root modulo p, where p is prime.
 
     See: https://www.jstor.org/stable/2153696
 
@@ -2568,28 +2639,6 @@ def _bach(
         "Failed to find a verified primitive root; try increasing B or max_tries.")
 
 @small_cache
-def _dirichlet_log_table(a: int, mod: int) -> dict[int, int]:
-    """
-    Build a log-table of table[x] = b such that a^x = b (mod m).
-    """
-    b, exp, powers = a, 1, {1: 0, a: 1}
-    while (b := (b * a) % mod) != 1:
-        powers[b] = (exp := exp + 1)
-
-    return powers
-
-@large_cache
-def _dirichlet_log_cache(a: int, b: int, mod) -> int | None:
-    """
-    Shared cache for discrete-logs.
-    """
-    a, b = a % mod, b % mod
-    if mod < 10000:
-        return _dirichlet_log_table(a, mod).get(b, None)
-    else:
-        return discrete_log(a, b, mod)
-
-@small_cache
 def _dirichlet_character_prime_power(p: int, e: int, k: int) -> Callable[[int], Number]:
     """
     Return the Dirichlet character χₘ‚ₖ : ℤ → ℂ under Conrey labeling,
@@ -2637,6 +2686,28 @@ def _dirichlet_character_prime_power(p: int, e: int, k: int) -> Callable[[int], 
             return exact.get(t) or exp(2j * pi * t / order)
 
     return chi
+
+@small_cache
+def _dirichlet_log_table(a: int, mod: int) -> dict[int, int]:
+    """
+    Build a log-table of table[x] = b such that a^x = b (mod m).
+    """
+    b, exp, powers = a, 1, {1: 0, a: 1}
+    while (b := (b * a) % mod) != 1:
+        powers[b] = (exp := exp + 1)
+
+    return powers
+
+@large_cache
+def _dirichlet_log_cache(a: int, b: int, mod) -> int | None:
+    """
+    Shared cache for discrete-logs.
+    """
+    a, b = a % mod, b % mod
+    if mod < 10000:
+        return _dirichlet_log_table(a, mod).get(b, None)
+    else:
+        return discrete_log(a, b, mod)
 
 
 
@@ -3015,10 +3086,9 @@ def _modular_roots_mod_prime(n: int, k: int, p: int) -> tuple[int, ...]:
         and all(pow(w, g // q, p) != 1 for q in pf)
     )
 
-    # Now enumerate all k-th roots:
-    # solutions = x * ζ where ζ^k=1, and that subgroup has size g
-    roots = []
-    w = 1
+    # Now enumerate all k-th roots
+    # The set of solutions is {x*ζ where ζ^k = 1}, which is a subgroup of size g
+    roots, w = [], 1
     for _ in range(g):
         roots.append((x * w) % p)
         w = (w * omega) % p
@@ -4617,7 +4687,7 @@ def digit_combinations(max_digits: int) -> Iterator[tuple[int, int]]:
     """
     factorials = [factorial(i) for i in range(max_digits + 1)]
     for d in range(1, max_digits + 1):
-        for digits in itertools.combinations_with_replacement(string.digits, d):
+        for digits in itertools.combinations_with_replacement('0123456789', d):
             i = next((i for i, ch in enumerate(digits) if ch != '0'), None)
             if i is None: continue  # skip all-zero case
             digit_counts = Counter(digits)
@@ -4670,6 +4740,9 @@ def digit_permutations(n: int) -> Iterator[int]:
 ########################################################################
 
 def _get_pool() -> multiprocessing.pool.Pool | None:
+    """
+    Get or create the persistent multiprocessing pool.
+    """
     if getattr(multiprocessing.process.current_process(), '_inheriting', False):
         return None
     if multiprocessing.process.current_process()._config.get('daemon'):
@@ -4695,7 +4768,10 @@ def _get_pool() -> multiprocessing.pool.Pool | None:
     return pool
 
 @singleton
-def _get_pool_state():
+def _get_pool_state() -> dict[str, Any]:
+    """
+    Get or create state for the persistent multiprocessing pool.
+    """
     try:
         context = multiprocessing.get_context('forkserver')
     except ValueError:
@@ -4706,7 +4782,7 @@ def _get_pool_state():
         'context': context,
         'pool': None,
         'timer': None,
-        'lock': threading.Lock(),
+        'lock': Lock(),
     }
 
     def shutdown():
@@ -4732,7 +4808,7 @@ def _get_pool_state():
             if timer:
                 try: timer.cancel()
                 except Exception: pass
-            timer = threading.Timer(600, shutdown)
+            timer = Timer(600, shutdown)
             timer.daemon = True
             state['timer'] = timer
             timer.start()
