@@ -1,3 +1,4 @@
+import graphs
 import numthy as nt
 import itertools
 import math
@@ -1404,7 +1405,7 @@ def problem_60(n=5):
                 graph[q].add(p)
 
         # Find cliques of size n and (n - 1)
-        maximal_cliques = nt.bron_kerbosch(graph)
+        maximal_cliques = graphs.bron_kerbosch(graph)
         big_cliques = [c for mc in maximal_cliques for c in combinations(mc, n)]
         small_cliques = [c for mc in maximal_cliques for c in combinations(mc, n - 1)]
 
@@ -1468,7 +1469,7 @@ def problem_61(n=8, k=4):
             return [node for node in graph[path[-1]] if node[0] not in figures]
 
     # Find cycles in the graph
-    cycle = next(nt.find_cycles(find_next=find_next), None)
+    cycle = next(graphs.find_cycles(find_next=find_next), None)
     return sum(value for figure, value in cycle) if cycle else None
 
 def problem_62(n=5):
@@ -1577,7 +1578,7 @@ def problem_68(n=5):
     return max(
         ''.join(map(str, sum(cycle, ())))
         for group in permutations(range(1, 2*n + 1), 3)
-        for cycle in nt.find_cycles(find_next=find_next, current_path=[group])
+        for cycle in graphs.find_cycles(find_next=find_next, current_path=[group])
     )
 
 def problem_69(N=1_000_000):
@@ -1827,7 +1828,7 @@ def problem_79(path='data/problem_79.txt'):
 
     # Try to perform topological sort on the graph
     try:
-        return ''.join(nt.topological_sort(graph))
+        return ''.join(graphs.topological_sort(graph))
     except ValueError:
         pass # cycle detected, fall back to SCS solution
 
@@ -1931,7 +1932,7 @@ def problem_81(
 
     # Find shortest path from 'source' to 'sink'
     get_edge_weight = lambda u, v: matrix[v[0]][v[1]] if v != 'sink' else 0
-    dist, _ = nt.dijkstra('source', get_neighbors, get_edge_weight)
+    dist, _ = graphs.dijkstra('source', get_neighbors, get_edge_weight)
     return dist['sink']
 
 def problem_82(
@@ -2159,8 +2160,8 @@ def problem_88(K=12000):
             yield (sequence_length + 1, sequence_sum + a, sequence_product * a, a)
 
     minimal_product_sum_numbers = [2*K] * (K + 1)
-    search = nt.search([(0, 0, 1, None)], find_next)
-    for sequence_length, sequence_sum, sequence_product, _ in search:
+    product_sum_search = graphs.search([(0, 0, 1, None)], find_next)
+    for sequence_length, sequence_sum, sequence_product, _ in product_sum_search:
         k = sequence_length + sequence_product - sequence_sum
         if sequence_product < minimal_product_sum_numbers[k]:
             minimal_product_sum_numbers[k] = sequence_product
@@ -2380,7 +2381,7 @@ def problem_95(N=1_000_000):
         cycle_lengths[cycle_start] += 1
         cycle_minimums[cycle_start] = min(cycle_minimums[cycle_start], cycle_current)
 
-    nt.find_functional_cycles(
+    graphs.find_functional_cycles(
         f=aliquot_sums.__getitem__,
         search=range(1, N + 1),
         domain=range(1, N + 1),
@@ -2763,7 +2764,7 @@ def problem_107(path='data/problem_107.txt'):
     # Find minimum spanning tree
     nodes = range(len(graph))
     edges = [(u, v) for u, v in itertools.combinations(nodes, 2) if graph[u][v] != 0]
-    minimum_spanning_tree = nt.kruskal(nodes, edges, lambda u, v: graph[u][v])
+    minimum_spanning_tree = graphs.kruskal(nodes, edges, lambda u, v: graph[u][v])
 
     # Calculate weight difference
     initial_weight = sum(graph[u][v] for u, v in edges)
@@ -3352,8 +3353,8 @@ def problem_136(N=50_000_000):
     And our total count n <= N is given by: π(N/4) + π(N/16) + (π(N) - π_4(N) - 1) / 2.
     """
     # Define prime counting functions
-    chi4 = lambda x: 0 if x % 2 == 0 else 1 if x % 4 == 1 else -1
-    Chi4 = lambda x: 1 if x % 4 in (1, 2) else 0
+    chi4 = nt.dirichlet_character(4, 3)
+    Chi4 = lambda x: (0, 1, 1, 0)[x % 4]
     count_primes_3_mod_4 = lambda x: (
         (nt.count_primes(x) - nt.sum_primes(x, chi4, Chi4) - (x > 2)) // 2
     )
@@ -3486,7 +3487,7 @@ def problem_142(n=3):
     best_clique = []
     while len(best_clique) < n:
         graph = make_graph(k)
-        cliques = [clique for clique in nt.bron_kerbosch(graph) if len(clique) >= n]
+        cliques = [clique for clique in graphs.bron_kerbosch(graph) if len(clique) >= n]
         #print(k, cliques)
         if cliques:
             best_clique = min(cliques, key=lambda c: sum(sorted(c)[:n]))
