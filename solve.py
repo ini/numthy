@@ -1,10 +1,12 @@
 import graphs
+import linalg
 import numthy as nt
 import itertools
 import math
 import string
 
 from collections import Counter, defaultdict, deque
+from fractions import Fraction
 from functools import cache
 from heapq import heappop, heappush
 from itertools import combinations, combinations_with_replacement, islice, permutations
@@ -2021,10 +2023,10 @@ def problem_84(n=4, k=3):
             distribute_probability(state, target, 0 if jail else next_d, 1/(n*n))
 
     # Find stationary distribution
-    I = nt.identity_matrix(num_states)
-    A = nt.matrix_difference(nt.matrix_transpose(T), I)
+    I = linalg.identity_matrix(num_states)
+    A = linalg.matrix_difference(linalg.matrix_transpose(T), I)
     A[-1], b = [1] * num_states, [0] * (num_states - 1) + [1]
-    probs = nt.linear_solve(A, b)
+    probs = linalg.linear_solve(A, b)
 
     # Find most likely squares
     square_probs = [sum(probs[i::num_squares]) for i in range(num_squares)]
