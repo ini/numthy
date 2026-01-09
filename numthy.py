@@ -5,26 +5,22 @@
 
 from __future__ import annotations
 
-import atexit
 import bisect
 import cmath
 import hashlib
 import hmac
 import itertools
-import multiprocessing
-import os
 import secrets
 import sys
 
-from collections import Counter, defaultdict, deque
+from collections import Counter, defaultdict, deque, namedtuple
 from collections.abc import Sequence
 from fractions import Fraction
 from functools import lru_cache, partial, reduce
 from heapq import heappop, heappush
 from math import factorial, gcd, inf, isqrt, lcm, log, prod, sqrt
-from operator import mul, sub, xor
-from threading import Lock, Timer
-from typing import Any, Callable, Hashable, Iterable, Iterator, TypeAlias
+from operator import mul, xor
+from typing import Any, Callable, Hashable, Iterable, Iterator, TypeAlias, TypeVar
 
 
 
@@ -50,6 +46,8 @@ __all__ = [
     # Diophantine Equations
     'bezout', 'cornacchia', 'pell', 'pythagorean_triples',
     'periodic_continued_fraction', 'convergents',
+    # Lattice Methods
+    'integer_solve', 'integer_nullspace', 'lll_reduce', 'babai_closest_vector',
     # Combinatorics
     'pascal', 'factorial_valuation', 'binomial_valuation',
     'partition_numbers', 'count_partitions', 'euler_transform',
@@ -57,21 +55,16 @@ __all__ = [
     # Integer Sequences
     'lucas', 'fibonacci', 'fibonacci_index', 'fibonacci_numbers',
     'polygonal', 'polygonal_index', 'polygonal_numbers', 'is_polygonal',
-    # Linear Algebra
-    'linear_solve', 'nullspace', 'identity_matrix', 'matrix_apply', 'matrix_transpose',
-    'matrix_sum', 'matrix_difference', 'matrix_product',
     # Utilities
-    'one', 'identity', 'nth', 'group_by_key', 'group_permutations',
+    'nth', 'group_by_key', 'group_permutations',
     'permutation', 'powerset', 'disjoint_subset_pairs', 'polynomial',
     'iroot', 'ilog', 'is_square', 'non_squares', 'squares', 'cubes',
-    'perfect_power', 'binary_search', 'is_zero',
+    'perfect_power', 'binary_search',
     # Digits
     'digit_sum', 'digit_count', 'digit_combinations', 'digit_permutations',
 ]
 
 Number: TypeAlias = int | float | complex | Fraction
-Vector: TypeAlias = list[Number]
-Matrix: TypeAlias = list[list[Number]]
 singleton = lru_cache(maxsize=1)
 small_cache = lru_cache(maxsize=128)
 large_cache = lru_cache(maxsize=1048576)
@@ -87,10 +80,10 @@ def is_prime(n: int) -> bool:
     """
     Test if a given integer n is prime.
 
-    Uses a combination of trial division, then either the Miller-Rabin primality
-    test with deterministic bases, the extra-strong variant of the Baillie-PSW
-    primality test (which has been computationally verified for all n < 2^64),
-    or probabilistic Miller-Rabin with 64 rounds for n >= 2^64.
+    Uses a combination of trial division, the Miller-Rabin primality test
+    with deterministic bases, or the extra-strong variant of the Baillie-PSW
+    primality test (this variant has no known pseudoprimes, and has been
+    computationally verified to have no counterexamples for all n < 2^64).
 
     See: https://miller-rabin.appspot.com/ (deterministic Miller-Rabin base sets)
     See: https://ntheory.org/pseudoprimes.html (BPSW verification up to 2^64)
@@ -122,14 +115,8 @@ def is_prime(n: int) -> bool:
         bases = (4230279247111683200, 14694767155120705706, 16641139526367750375)
     elif n < 55245642489451:
         bases = (2, 141889084524735, 1199124725622454117, 11096072698276303650)
-    elif n < 18446744073709551616:
-        return _baillie_psw(n) # BPSW has no pseudoprimes < 2^64, speed ≈ 4-5 MR rounds
-    elif n < 318665857834031151167461:
-        bases = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37)
-    elif n < 3317044064679887385961981:
-        bases = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41)
     else:
-        return _miller_rabin(n, 64)  # 64-MR rounds with random bases
+        return _baillie_psw(n) # BPSW has no known pseudoprimes < 2^64
 
     return _miller_rabin(n, bases)
 
@@ -176,20 +163,21 @@ def random_prime(num_bits: int, *, safe: bool = False) -> int:
         k = num_bits - 1 if safe else num_bits
         middle = secrets.randbits(k - 2)  # all random bits except first/last
         p = (1 << (k - 1)) | (middle << 1) | 1  # force first/last bit to 1
-        if is_prime(p):
+        if _miller_rabin(p, 64):
             if safe:
-                if is_prime(q := 2*p + 1):
+                if _miller_rabin(q := 2*p + 1, 64):
                     return q
             else:
                 return p
 
 def primes(
+    *,
     low: int = 2,
     high: int | None = None,
-    num: int | None = None,
+    count: int | None = None,
 ) -> Iterator[int]:
     """
-    Generate primes in increasing order within the range `[low, high]`.
+    Generate at most `count` primes in increasing order within the range `[low, high]`.
 
     Uses the sieve of Eratosthenes, with a segmented approach for large or
     unbounded ranges.
@@ -200,52 +188,52 @@ def primes(
         Lower bound for prime numbers
     high : int
         Upper bound for prime numbers (default is infinite)
-    num : int
+    count : int
         Maximum number of primes to generate (default is infinite)
     """
     DEFAULT_SIEVE_SIZE, MAX_SIEVE_SIZE = 1000, 10_000_000
     low = max(low, 2)
     high = inf if high is None else high
-    num = inf if num is None else num
+    count = inf if count is None else count
 
     # Initial list of small primes to use for the segmented sieve
     small_primes = [
         2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41,
         43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97,
     ]
-    if low == 2 and num <= 25 and high <= 100:
-        yield from (p for p in small_primes[:num] if p <= high)
+    if low == 2 and count <= 25 and high <= 100:
+        yield from (p for p in small_primes[:count] if p <= high)
         return
 
     # Generate initial prime
-    if low <= 2 <= high and num > 0:
+    if low <= 2 <= high and count > 0:
         yield 2
-        num -= 1
-    elif low > high or num <= 0:
+        count -= 1
+    elif low > high or count <= 0:
         return
 
     # Set initial sieve size
     # When `high` is given, sieve on range [low, high]
-    # When `num` is given, sieve on range [low, n (log n + log log n)],
-    # where n is an upper bound on `π(low) + num`
-    if high == num == inf:
+    # When `count` is given, sieve on range [low, n (log n + log log n)],
+    # where n is an upper bound on `π(low) + count`
+    if high == count == inf:
         sieve_size = DEFAULT_SIEVE_SIZE
     else:
-        n = num + 1.25506 * low / max(log(low), 1)  # Rosser & Schoenfeld bound (1962)
+        n = count + 1.25506 * low / max(log(low), 1)  # Rosser & Schoenfeld bound (1962)
         upper_bound = n * (log(n) + log(log(n)))  # upper bound on the nth prime
         sieve_size = int(min(MAX_SIEVE_SIZE, high - low + 1, upper_bound - low))
 
     # Generate additional primes
-    while low <= high and num > 0:
+    while low <= high and count > 0:
         # If necessary, extend list of small primes via Bertrand intervals
         while (p := small_primes[-1]) < isqrt(low + sieve_size):
             small_primes.extend(_segmented_eratosthenes(p + 1, p, small_primes))
 
         # Get new primes with segmented sieve
         new_primes = _segmented_eratosthenes(low, sieve_size, small_primes)
-        if num < inf:
-            new_primes = tuple(itertools.islice(new_primes, num))
-            num -= len(new_primes)
+        if count < inf:
+            new_primes = tuple(itertools.islice(new_primes, count))
+            count -= len(new_primes)
 
         # Yield new primes
         yield from new_primes
@@ -301,7 +289,7 @@ def sum_primes(
         if x < 10000:
             return sum(primes(high=x))
         else:
-            f, f_prefix_sum = identity, (lambda n: n * (n + 1) // 2)
+            f, f_prefix_sum = _identity, (lambda n: n * (n + 1) // 2)
     elif f is None or f_prefix_sum is None:
         raise ValueError("Both f() and f_prefix_sum() must be provided.")
 
@@ -331,24 +319,10 @@ def _miller_rabin(n: int, bases: Iterable[int] | int = (2,)) -> bool:
     s = (d & -d).bit_length() - 1
     d >>= s
 
-    # Multiprocessing for large inputs with many bases
-    if isinstance(bases, int) and bases >= 16 and n.bit_length() >= 80:
-        if (pool := _get_pool()) is not None:
-            # Small filter to catch composites quickly
-            if not _miller_rabin_rounds(n, s, d, (2,)):
-                return False
+    # Perform a Miller-Rabin test for each base sequentially
+    return _miller_rabin_worker(n, s, d, bases)
 
-            # Test bases in parallel
-            num_workers = min(8, multiprocessing.cpu_count(), bases)
-            bases_per_worker, remainder = divmod(bases, num_workers)
-            batches = [bases_per_worker + (i < remainder) for i in range(num_workers)]
-            worker = partial(_miller_rabin_rounds, n, s, d)
-            return all(pool.map(worker, batches))
-
-    # Otherwise, perform a Miller-Rabin test for each base sequentially
-    return _miller_rabin_rounds(n, s, d, bases)
-
-def _miller_rabin_rounds(n: int, s: int, d: int, bases: Iterable[int] | int) -> bool:
+def _miller_rabin_worker(n: int, s: int, d: int, bases: Iterable[int] | int) -> bool:
     """
     Miller-Rabin primality test for n over the given bases,
     where n - 1 = 2^s * d with d odd.
@@ -368,13 +342,11 @@ def _miller_rabin_rounds(n: int, s: int, d: int, bases: Iterable[int] | int) -> 
     # Run a Miller-Rabin test for each base
     for a in bases:
         x = pow(a, d, n)
-        if x == n - 1 or x == 1:
-            continue  # probable prime
+        if x == n - 1 or x == 1: continue  # probable prime
 
         for _ in range(s - 1):
             x = pow(x, 2, n)
-            if x == n - 1:
-                break  # probable prime
+            if x == n - 1: break  # probable prime
         else:
             return False  # composite
 
@@ -382,12 +354,13 @@ def _miller_rabin_rounds(n: int, s: int, d: int, bases: Iterable[int] | int) -> 
 
 def _baillie_psw(n: int) -> bool:
     """
-    Baillie-PSW primality test for n. Uses an extra-strong Lucas step.
+    Baillie-PSW primality test for n. Uses an extra strong Lucas step.
 
     There are no known counterexamples to this primality test,
     and it has been computationally verified for all n < 2^64.
 
     See: https://math.dartmouth.edu/~carlp/PDF/paper25.pdf
+    See: https://ntheory.org/pseudoprimes.html
 
     Complexity
     ----------
@@ -411,19 +384,17 @@ def _baillie_psw(n: int) -> bool:
     s = (d & -d).bit_length() - 1
     d >>= s
 
-    # Perform an extra-strong Lucas primality test
-    U, V = 1 % n, P % n
+    # Generate the Lucas sequence element V_d(P, Q) via binary Lucas chain 
+    P %= n
+    V, V_next = P, (P*P - 2) % n  # these represent V_k, V_{k+1}
     for bit in format(d, 'b')[1:]:
-        # Doubling step
-        U, V = (U*V) % n, (V*V - 2) % n
+        if bit != '0':
+            V, V_next = (V * V_next - P) % n, (V_next * V_next - 2) % n
+        else:
+            V, V_next = (V * V - 2) % n, (V * V_next - P) % n
 
-        # Incrementing step (with division by 2 in Z/nZ for odd n)
-        if bit == '1':
-            U, V = (P*U + V) % n, (D*U + P*V) % n
-            U = (U + n) >> 1 if U & 1 else U >> 1
-            V = (V + n) >> 1 if V & 1 else V >> 1
-
-    # 1st extra-strong condition: U_d = 0 (mod n) and V = ± 2 (mod n)
+    # 1st extra-strong condition: U_d = 0 (mod n) and V_d = ± 2 (mod n)
+    U = (pow(D, -1, n) * (2 * V_next - P * V)) % n
     if U == 0 and V in (2, n - 2):
         return True
 
@@ -654,7 +625,7 @@ def _lmo_s1(
     """
     if f is None:
         phi = partial(_phi_prime_count, small_primes=small_primes[:k])
-    elif f == identity:
+    elif f == _identity:
         phi = partial(_phi_prime_sum, small_primes=small_primes[:k])
     else:
         phi = lambda x, a: f_prefix_sum(x) if a == 0 else (
@@ -716,8 +687,7 @@ def _lmo_s2(
             p = small_primes[b]
             min_m = max(x // (p * high), y // p)
             max_m = min(x // (p * low), y)
-            if p >= max_m:
-                break
+            if p >= max_m: break
 
             # Find special leaves in the tree (i.e. φ(x/n, b) where n > y)
             for m in range(max_m, min_m, -1):
@@ -761,8 +731,7 @@ def _lmo_odd_sieve(
 
     # Iterate over primes
     for p in odd_primes:
-        if max_prime and p > max_prime:
-            break
+        if max_prime and p > max_prime: break
 
         # Find next odd multiple of p >= start
         next_odd_multiple = start + (p - start) % (2*p)
@@ -803,23 +772,22 @@ def _fenwick_tree_update(tree: list[Number], index: int, value: Number, tree_siz
         tree[i] += value
 
 @small_cache
-def _fenwick_tree_edges(tree_size: int) -> list[tuple[int, int]]:
+def _fenwick_tree_edges(tree_size: int) -> tuple[tuple[int, int]]:
     """
     Get all (index, parent_index) pairs for a Binary Indexed Tree (Fenwick Tree).
     """
-    return [
+    return tuple(
         (index, index | (index + 1))
         for index in range(tree_size - 1)
         if index | (index + 1) < tree_size
-    ]
+    )
 
 @large_cache
 def _fenwick_tree_query_path(index: int) -> tuple[int, ...]:
     """
     Get all indices that need to be queried for a prefix sum.
     """
-    path = []
-    index += 1
+    path, index = [], index + 1
     while index > 0:
         path.append(index - 1)
         index &= index - 1  # clears the lowest set bit
@@ -907,7 +875,7 @@ def _primorial(n: int) -> int:
     """
     Calculate the product of the first n primes.
     """
-    return prod(primes(num=n))
+    return prod(primes(count=n))
 
 
 
@@ -965,7 +933,7 @@ def _gen_prime_factors(n: int) -> Iterator[int]:
 
     Uses a combination of trial division, Brent's variant of Pollard's rho
     factorization method, Lenstra's elliptic curve method (ECM),
-    and self-initializing quadratic sieve (SIQS).
+    and a self-initializing quadratic sieve (SIQS).
     """
     if n < 1:
         raise ValueError("n must be a positive integer.")
@@ -982,41 +950,42 @@ def _gen_prime_factors(n: int) -> Iterator[int]:
     # Use a pipeline of Brent/ECM/SIQS factorization algorithms
     stack = deque([n])
     while stack:
-        n = stack.pop()
+        n = stack.popleft()
         if is_prime(n):
             yield n
         elif n > 1:
             num_bits = n.bit_length()
 
-            # Use full pipeline for large inputs
-            if num_bits >= 64:
-                # Run a capped version of Brent to catch small factors
-                max_attempts = 3 if num_bits <= 80 else 2
-                max_iterations = 1 << 20 if num_bits <= 80 else 1 << 16
-                d = _brent(n, max_attempts=max_attempts, max_iterations=max_iterations)
-                if 1 < d < n:
-                    stack.append(d)
-                    stack.append(n // d)
-                    continue
+            # Brent for small factors (more aggressively capped for 64+ bit inputs)
+            max_attempts = 2 if num_bits < 64 else 1
+            max_iterations = 2**18 if num_bits < 64 else 2**16
+            d = _brent(n, max_attempts=max_attempts, max_iterations=max_iterations)
+            if 1 < d < n:
+                stack.extend([d, n // d])
+                continue
 
-                # Try ECM (good at finding small/medium size factors)
-                d = _ecm(n, max_curves=(12 if num_bits >= 128 else None))
-                if 1 < d < n:
-                    stack.append(d)
-                    stack.append(n // d)
-                    continue
+            # Retry with Brent for any remaining small factors
+            # Here Brent has no fixed limit on attempts (i.e. won't return failure)
+            if num_bits < 64:
+                d = _brent(n, max_attempts=None, max_iterations=None)
+                stack.extend([d, n // d])
+                continue
 
-                # Fallback to SIQS
-                d = _siqs(n)
-                if 1 < d < n:
-                    stack.append(d)
-                    stack.append(n // d)
-                    continue
+            # ECM to peel off medium-sized factors
+            d = _ecm(n, max_curves=(32 if num_bits >= 160 else None))
+            if 1 < d < n:
+                stack.extend([d, n // d])
+                continue
 
-            # Fallback to Brent for small inputs (or if ECM/SIQS fails)
-            d = _brent(n)
-            stack.append(d)
-            stack.append(n // d)
+            # Fallback to SIQS for remaining large factors
+            B = None
+            while True:
+                d = _siqs(n, B=B)
+                if 1 < d < n:
+                    stack.extend([d, n // d])
+                    break
+                else:
+                    B = int((B or 30000) * 1.25)  # increase size of factor base
 
 def _count_distinct_prime_factors(n: int) -> int | None:
     """
@@ -1031,7 +1000,7 @@ def _count_distinct_prime_factors(n: int) -> int | None:
     # Use iterative factorization
     stack, seen_prime_factors = deque([n]), set()
     while stack:
-        n = stack.pop()
+        n = stack.popleft()
         if is_prime(n):
             if n in seen_prime_factors:
                 return None  # found squared factor
@@ -1039,8 +1008,7 @@ def _count_distinct_prime_factors(n: int) -> int | None:
                 seen_prime_factors.add(n)
         elif n > 1:
             d = _brent(n)
-            stack.append(d)
-            stack.append(n // d)
+            stack.extend([d, n // d])
 
     return len(seen_prime_factors)
 
@@ -1074,13 +1042,15 @@ def _brent(
     n: int,
     max_attempts: int | None = None,
     max_iterations: int | None = None,
-    batch_size: int = 256,
+    batch_size: int = 128,
 ) -> int:
     """
-    Brent's variant of Pollard's rho factorization method.
+    Algorithm based on Brent's variant of Pollard's rho factorization method.
     Returns an integer factor of n.
 
-    When `max_attempts` is set to None, we are guaranteed to find a non-trivial factor.
+    This particular version has a deterministic flavor; when `max_attempts`
+    is set to None, we are guaranteed to find a non-trivial factor for any
+    composite n in worst-case O(√n) time.
 
     See: https://maths-people.anu.edu.au/~brent/pd/rpb051i.pdf
 
@@ -1125,8 +1095,7 @@ def _brent(
             num_iterations += r
             for _ in range(r):
                 y = (y*y + c) % n
-            if max_iter is not None and num_iterations > max_iter:
-                break
+            if max_iter is not None and num_iterations > max_iter: break
 
             # Batch GCD
             for k in range(0, r, batch_size):
@@ -1136,10 +1105,8 @@ def _brent(
                 for _ in range(limit):
                     y = (y*y + c) % n
                     q = q * (x - y) % n
-                if max_iter is not None and num_iterations > max_iter:
-                    break
-                if (G := gcd(q, n)) > 1:
-                    break
+                if max_iter is not None and num_iterations > max_iter: break
+                if (G := gcd(q, n)) > 1: break
 
             # Double the range
             r *= 2
@@ -1158,6 +1125,7 @@ def _brent(
         if 1 < G < n:
             return G  # success, found non-trivial factor
 
+    # We never reach here if the caller passed `max_attempts=None`
     return 1  # failure, return trivial factor
 
 def _brent_iteration_schedule(n: int) -> Iterator[int]:
@@ -1196,20 +1164,20 @@ def _ecm(
     if (n & 1) == 0:
         return 2
 
-    # Heuristics tuned for 64–128-bit composites.
-    # In this range, each curve should be cheap and we expect SIQS to take over
-    # for hard semiprimes (e.g. ~64-bit factors). So we cap stage-2 more
-    # aggressively than in "big integer" ECM parameter tables.
+    # Select hyperparameters based on input size
+    # B1 and B2 are bounds for the primes used in stage 1 and stage 2
+    # Defaults for (B1, B2, max_curves) are tuned for 64–128-bit composites
     bits = n.bit_length()
-    if B1 is None:
-        B1_thresholds = [(90, 2000), (105, 4000), (128, 11000), (160, 50000)]
-        B1 = _threshold_select(bits, B1_thresholds, 250000)
-    if B2 is None:
-        if bits <= 128: B2 = min(B1 * 50, 2_000_000)
-        else: B2 = min(B1 * 100, 10_000_000)
-    if max_curves is None:
-        curve_thresholds = [(90, 10), (105, 12), (128, 14), (160, 40)]
-        max_curves = _threshold_select(bits, curve_thresholds, 80)
+    default_thresholds = [
+        (68, (500, 5000, 200)),
+        (84, (1000, 20000, 400)),
+        (92, (1500, 30000, 800)),
+        (108, (4000, 150000, 1500)),
+        (128, (5000, 200000, 1000)),
+    ]
+    defaults = _threshold_select(bits, default_thresholds, (5000, 200000, 1000))
+    B1, B2 = B1 or defaults[0], B2 or defaults[1]
+    max_curves = max_curves or defaults[2]
 
     # Precompute prime powers p^e <= B1
     prime_powers = _ecm_prime_powers(B1)
@@ -1549,8 +1517,8 @@ def _siqs(
     ----------
     O(exp((1 + o(1)) √(log n log log n))) time
     """
-    base, _ = perfect_power(n)
-    if base is not None:
+    base, exponent = perfect_power(n)
+    if exponent > 1:
         return base
 
     bits = n.bit_length()
@@ -1631,10 +1599,7 @@ def _build_factor_base(n: int, B: int) -> list[tuple[int, float, int]]:
     factor_base = [(2, log(2), 1)] if n % 2 != 0 and B >= 2 else []
     for p in primes(low=3, high=B):
         if pow(n % p, (p - 1) // 2, p) != 1: continue  # skip non-residues
-        try:
-            factor_base.append((p, log(p), _tonelli_shanks(n, p)))
-        except _NoSolutionError:
-            continue
+        factor_base.append((p, log(p), _tonelli_shanks(n, p)))
 
     return factor_base
 
@@ -1642,7 +1607,7 @@ def _gen_polynomials(
     n: int,
     factor_base: list[tuple[int, float, int]],
     M: int,
-) -> Iterator[tuple[int, int]]:
+) -> Iterator[tuple[int, int, dict[int, int]]]:
     """
     Generate SIQS polynomials Q(x) = (Ax + b)^2 - n,
     where A ≈ √(2n)/M is the product of k primes and b satisfies b^2 ≡ n (mod A).
@@ -1687,6 +1652,9 @@ def _gen_polynomials(
         if len(seen) > 20000:
             seen.clear()
 
+        # Compute mod inverses for A^(-1) mod p for the factor base
+        A_inverses = {p: pow(A, -1, p) for p, _, _ in factor_base if A % p != 0}
+
         # For each prime p | A, we have two modular roots (±r)^2 = n (mod p)
         # Fix the 1st sign (no ± b duplicates) and set the others to get b^2 ≡ n (mod A)
         # B_i ≡ r_i (mod p_i), B_i ≡ 0 (mod other primes) via CRT
@@ -1698,12 +1666,12 @@ def _gen_polynomials(
 
         # Enumerate all 2^(k-1) sign combinations via Gray code
         b = sum(B) % A  # base solution
-        yield A, shift(b)
+        yield (A, shift(b), A_inverses)
         for i in range(1, 1 << (k - 1)):
             j = (i & -i).bit_length()
             sign = 1 if ((i >> j) & 1) else -1
             b = (b + 2 * sign * B[j]) % A  # flip sign of component j
-            yield A, shift(b)
+            yield (A, shift(b), A_inverses)
 
 @lru_cache(maxsize=256)
 def _byte_subtraction_table(d: int) -> bytes:
@@ -1724,23 +1692,24 @@ def _byte_threshold_table(threshold: int) -> bytes:
 def _sieve_polynomial(
     n: int,
     factor_base: list[tuple[int, float, int]],
-    A: int,
-    B: int,
+    polynomial: tuple[int, int, dict[int, int]],
     M: int,
 ) -> Iterator[tuple[int, int]]:
     """
-    Sieve the polynomial Q(x) = (Ax + B)^2 - n for x in [-M, M].
-    Yields (Q(x), Ax + B) pairs for candidates passing the smoothness threshold.
+    Sieve the polynomial Q(x) = (Ax + b)^2 - n for x in [-M, M].
+    Yields (Q(x), Ax + b) pairs for candidates passing the smoothness threshold.
     """
+    A, b, A_inverses = polynomial
     length, offset = 2*M + 1, -M
 
     # Set smoothness threshold ~ max|Q(x)|
-    max_abs_Q = max(abs((-A*M + B)**2 - n), abs((A*M + B)**2 - n))
+    max_abs_Q = max(abs((-A*M + b)**2 - n), abs((A*M + b)**2 - n))
     base_log = log(max_abs_Q) if max_abs_Q > 1 else 1.0
     threshold = 0.55 * base_log  # higher than usual to account for skipping p < 30
 
     # Initialize sieve as bytearray
-    # Scale logs to fit in a byte (0-255), where base_log -> 255 is the max byte
+    # Scale logs to fit in a byte (0-255), where base_log -> 255 is the max value
+    # Sieve elements start at 255 and decrease by scaled log(p) for each factor p 
     sieve = bytearray([255]) * length
     scale = 255 / base_log
     threshold = round(threshold * scale)
@@ -1755,8 +1724,8 @@ def _sieve_polynomial(
         table = _byte_subtraction_table(round(log_p * scale))
 
         # Mark all x where Q(x) = 0 (mod p)
-        inv_A = pow(A, -1, p)
-        x1, x2 = ((root - B) * inv_A) % p, ((-root - B) * inv_A) % p
+        inv_A = A_inverses[p]
+        x1, x2 = ((root - b) * inv_A) % p, ((-root - b) * inv_A) % p
         start = (x1 - offset) % p
         sieve[start::p] = sieve[start::p].translate(table)
         if x2 != x1:
@@ -1766,7 +1735,7 @@ def _sieve_polynomial(
     # Yield only candidates that pass the smoothness threshold
     mask = sieve.translate(_byte_threshold_table(threshold))
     for i in itertools.compress(range(length), mask):
-        y = A * (offset + i) + B
+        y = A * (offset + i) + b
         Q = y * y - n
         if Q != 0:
             yield Q, y
@@ -1802,8 +1771,8 @@ def _collect_relations(
     # Each partial contributes a sparse column with bits at its large primes (mod 2).
     # When a column reduces to 0, we've found a dependency whose large primes cancel.
     lp_index, lp_pivots, lp_masks = {}, {}, {}
-    for A, Bp in itertools.islice(polynomial_generator, max_polynomial_count):
-        for Q, y in _sieve_polynomial(n, factor_base, A, Bp, M):
+    for polynomial in itertools.islice(polynomial_generator, max_polynomial_count):
+        for Q, y in _sieve_polynomial(n, factor_base, polynomial, M):
             # Factor Q over the factor base
             pf, residual = _partial_factorization(abs(Q), factor_base_primes)
             pf[-1] = 1 if Q < 0 else 0  # account for sign with -1 factor
@@ -1834,33 +1803,33 @@ def _collect_relations(
                 # and each column is a large prime (indexed by lp_index)
                 combo = 1 << (len(partials) - 1)
                 while parity_vector:
-                    lead = parity_vector.bit_length() - 1
-                    if lead not in lp_pivots:
-                        lp_pivots[lead], lp_masks[lead] = parity_vector, combo
+                    pivot_col = parity_vector.bit_length() - 1  # MSB as a pivot
+                    if pivot_col not in lp_pivots:
+                        lp_pivots[pivot_col], lp_masks[pivot_col] = parity_vector, combo
                         break
-                    parity_vector ^= lp_pivots[lead]
-                    combo ^= lp_masks[lead]
+                    parity_vector ^= lp_pivots[pivot_col]
+                    combo ^= lp_masks[pivot_col]
 
                 # If v = 0, combo encodes a subset of partials where all large primes
                 # occur an even number of times (i.e. their product is a square)
                 if parity_vector == 0:
-                    # Combine the dependency subset: large primes cancel to a square
-                    pf_combined, lp_counts, X_prod = {}, {}, 1
+                    pf_combined, lp_counts, X_product = {}, {}, 1
                     while combo:
-                        X, pf, lps = partials[(combo & -combo).bit_length() - 1]
-                        X_prod = (X_prod * X) % n
+                        partial_index = combo.bit_length() - 1
+                        X, pf, lps = partials[partial_index]
+                        X_product = (X_product * X) % n
                         for p, e in pf.items():
                             pf_combined[p] = pf_combined.get(p, 0) + e
                         for p in lps:
                             lp_counts[p] = lp_counts.get(p, 0) + 1
-                        combo &= combo - 1
+                        combo ^= 1 << partial_index
 
                     # D = sqrt of large-prime part = prod p^(count/2) (mod n)
                     D = 1
                     for p, count in lp_counts.items():
                         D = D * pow(p, count >> 1, n) % n
 
-                    relations.setdefault((X_prod * pow(D, -1, n)) % n, pf_combined)
+                    relations.setdefault((X_product * pow(D, -1, n)) % n, pf_combined)
 
             if len(relations) >= min_relation_count:
                 return list(relations.items()), None
@@ -1911,8 +1880,7 @@ def _nullspace_gf2(rows: list[int]) -> list[int]:
         combo = 1 << i
         r = row
         while r:
-            # Pick the least significant bit as a pivot
-            pivot_col = (r & -r).bit_length() - 1
+            pivot_col = r.bit_length() - 1  # most significant bit as a pivot
             if pivot_col in pivots:
                 pivot_row, pivot_mask = pivots[pivot_col]
                 r ^= pivot_row
@@ -2568,13 +2536,7 @@ def _crt_two_congruences(
     mod = n1 * n2_  # n1 * n2 // d
     return x % mod, mod
 
-def _bach(
-    p: int,
-    eps: float = 0.01,
-    B: int | None = None,
-    B_max: int = 5_000_000,
-    max_tries: int = 64,
-) -> int:
+def _bach(p: int) -> int:
     """
     Use Bach's primitive root finding algorithm to search for
     a primitive root modulo p, where p is prime.
@@ -2583,20 +2545,17 @@ def _bach(
 
     Complexity
     ----------
-    O(k (log² p) / (ε log log p)) + f(p), where f(p) is the time to factor p - 1
-    and k is the number of retries (max_tries).
+    Las Vegas O((log p)² / (log log p)²) expected multiplications
     """
     if p == 2:
         return 1
     if p == 3:
         return 2
-    if not 0.0 < eps < 1.0:
-        raise ValueError("must have 0 < eps < 1")
 
-    # Use heuristic B ~ log((p-1)/2) / eps
-    # This can be huge for tiny eps, so we cap with B_max.
-    B = int(log((p - 1) // 2) / eps) if B is None else B
-    B = max(3, min(B, B_max, p - 1))
+    # Find B such that B log(B) = 30 log(p)
+    log_p = ilog(p - 1) + 1  # ⌈log(p)⌉
+    log_log_p = ilog(log_p - 1) + 1  # ⌈log⌈log(p)⌉⌉
+    B = binary_search(lambda x: x * ilog(x), 30 * log_p, low=1)
 
     # Factor φ(p) = p - 1
     pf = prime_factorization(p - 1)
@@ -2606,37 +2565,39 @@ def _bach(
     partial_pf = {q: e for q, e in pf.items() if q < B}
     Q = prod(q**e for q, e in pf.items() if q >= B)
 
-    # Search for primitive root
-    k = (p - 1) // Q
-    for _ in range(max_tries):
-        # Build element of order (p-1)/Q
-        a = 1
-        for q, e in partial_pf.items():
-            # Choose b such that b^((p-1)/q) != 1
-            b = secrets.randbelow(p - 3) + 2
-            while pow(b, (p - 1) // q, p) == 1:
-                b = secrets.randbelow(p - 3) + 2
+    # Build element of order (p-1)/Q
+    # For each q < B, choose b <= 2(log(p))^2 such that b^((p-1)/q) != 1
+    a = 1
+    b_max = 2*log_p*log_p
+    for q, e in partial_pf.items():
+        exponent = (p - 1) // q
+        b = secrets.randbelow(b_max - 1) + 2
+        while pow(b, exponent, p) == 1:
+            b = secrets.randbelow(b_max - 1) + 2
 
-            a = (a * pow(b, (p - 1) // pow(q, e), p)) % p
+        a = (a * pow(b, (p - 1) // (q**e), p)) % p
 
-        # Find candidate solution
-        if Q == 1:
-            g = a
-        else:
-            # Choose b with b^k != 1
-            b = secrets.randbelow(p - 3) + 2  # random in [2, p-2]
-            while pow(b, k, p) == 1:
-                b = secrets.randbelow(p - 3) + 2  # random in [2, p-2]
+    # If Q = 1, a is already a primitive root
+    if Q == 1:
+        return a
 
-            # Lift by multiplying a * b^k
-            g = (a * pow(b, k, p)) % p
+    # Search for b to lift a to a primitive root
+    # Assuming the Extended Riemann Hypothesis holds, g = a * b^((p-1)/Q)
+    # is a primitive root for some b <= 5(log(p))^4 / (log(log(p)))^2
+    exponent = (p - 1) // Q
+    b_max = 5 * -(-(log_p**4) // (log_log_p**2))
+    while True:
+        # Find b such that b^((p-1)/Q) != 1
+        b = secrets.randbelow(b_max - 1) + 2
+        while pow(b, exponent, p) == 1:
+            b = secrets.randbelow(b_max - 1) + 2
+
+        # Lift by multiplying a * b^((p-1)/Q)
+        g = (a * pow(b, exponent, p)) % p
 
         # Verify solution
         if all(pow(g, (p - 1) // q, p) != 1 for q in pf):
             return g
-
-    raise RuntimeError(
-        "Failed to find a verified primitive root; try increasing B or max_tries.")
 
 @small_cache
 def _dirichlet_character_prime_power(p: int, e: int, k: int) -> Callable[[int], Number]:
@@ -2699,7 +2660,7 @@ def _dirichlet_log_table(a: int, mod: int) -> dict[int, int]:
     return powers
 
 @large_cache
-def _dirichlet_log_cache(a: int, b: int, mod) -> int | None:
+def _dirichlet_log_cache(a: int, b: int, mod: int) -> int | None:
     """
     Shared cache for discrete-logs.
     """
@@ -3637,6 +3598,422 @@ def _berggren() -> Iterator[tuple[int, int, int]]:
 
 
 ########################################################################
+########################### Lattice Methods ############################
+########################################################################
+
+_T = TypeVar('T', bound=Number)
+Vector: TypeAlias = list[_T]
+Matrix: TypeAlias = list[list[_T]]
+
+def integer_solve(A: Matrix[int], b: Vector[int]) -> Vector[int] | None:
+    """
+    Find an integer solution x to Ax = b, if one exists.
+
+    Uses Smith normal form to reduce the system to diagonal form,
+    then checks divisibility conditions for solvability.
+
+    Parameters
+    ----------
+    A : Matrix
+        Integer coefficient matrix
+    b : Vector
+        Integer target vector
+
+    Returns
+    -------
+    Vector | None
+        A particular integer solution with free variables set to 0,
+        or None if no integer solution exists.
+    """
+    if not A:
+        return [] if not b else None
+
+    m, n = len(A), len(A[0])
+    if len(b) != m:
+        raise ValueError("Dimension mismatch")
+
+    S, U, V = _smith_normal_form(A)
+
+    # b' = U @ b
+    b_prime = [sum(U[i][j] * b[j] for j in range(m)) for i in range(m)]
+
+    # Find rank
+    diag_len = min(m, n)
+    r = sum(1 for k in range(diag_len) if S[k][k] != 0)
+
+    # Check consistency
+    for i in range(r, m):
+        if all(S[i][j] == 0 for j in range(n)) and b_prime[i] != 0:
+            return None
+
+    # Solve S @ y = b'
+    y = [0] * n
+    for k in range(r):
+        d = S[k][k]
+        if d == 0:
+            if b_prime[k] != 0:
+                return None
+            continue
+        if b_prime[k] % d != 0:
+            return None
+        y[k] = b_prime[k] // d
+
+    # x = V @ y
+    return [sum(V[i][j] * y[j] for j in range(n)) for i in range(n)]
+
+def integer_nullspace(A: Matrix[int]) -> list[Vector[int]]:
+    """
+    Return a Z-basis for the integer nullspace of A.
+
+    The nullspace consists of all integer vectors x such that Ax = 0.
+    Uses Smith normal form to identify free variables.
+
+    Parameters
+    ----------
+    A : Matrix
+        Integer matrix
+
+    Returns
+    -------
+    list[Vector]
+        Basis vectors for ker(A) over the integers.
+    """
+    if not A:
+        return []
+
+    m, n = len(A), len(A[0])
+    S, _, V = _smith_normal_form(A)
+
+    diag_len = min(m, n)
+    r = sum(1 for k in range(diag_len) if S[k][k] != 0)
+
+    return [[V[i][j] for i in range(n)] for j in range(r, n)]
+
+def lll_reduce(B: Matrix[int], delta: float = 0.75) -> Matrix[int]:
+    """
+    LLL lattice basis reduction.
+
+    Given a basis for a lattice, returns a "reduced" basis whose vectors
+    are more orthogonal and shorter. This is useful for solving approximate
+    closest vector problems and breaking certain cryptographic schemes.
+
+    Parameters
+    ----------
+    B : Matrix
+        Integer matrix whose rows form a lattice basis
+    delta : float
+        Lovasz parameter (default 0.75). Must satisfy 0.25 < delta < 1.
+        Higher values give better reduction but slower runtime.
+
+    Returns
+    -------
+    Matrix
+        LLL-reduced basis (rows).
+    """
+    if not B:
+        return []
+    if not (0.25 < delta < 1):
+        raise ValueError("delta must satisfy 0.25 < delta < 1")
+
+    B = [row[:] for row in B]
+    k = len(B)
+
+    delta = Fraction(delta).limit_denominator()
+    idx = 1
+    while idx < k:
+        mu, bstar_sq = _gso(B)
+
+        # Size reduction
+        for j in range(idx - 1, -1, -1):
+            q = _nearest_int(mu[idx][j])
+            if q != 0:
+                B[idx] = [a - q * b for a, b in zip(B[idx], B[j])]
+
+        mu, bstar_sq = _gso(B)
+
+        if bstar_sq[idx] == 0:
+            idx += 1
+            continue
+
+        # Lovasz condition
+        if bstar_sq[idx] >= (delta - mu[idx][idx - 1] ** 2) * bstar_sq[idx - 1]:
+            idx += 1
+        else:
+            B[idx], B[idx - 1] = B[idx - 1], B[idx]
+            idx = max(idx - 1, 1)
+
+    return B
+
+def babai_closest_vector(B: Matrix[int], target: Vector[int]) -> Vector[int]:
+    """
+    Babai nearest-plane algorithm for approximate closest vector.
+
+    Given a lattice basis B and a target vector, finds a lattice vector
+    that is close to the target. For best results, use an LLL-reduced basis.
+
+    Parameters
+    ----------
+    B : Matrix
+        LLL-reduced lattice basis (rows)
+    target : Vector
+        Target vector in ambient space
+
+    Returns
+    -------
+    Vector
+        Approximate closest lattice vector to target.
+    """
+    if not B:
+        return [0] * len(target)
+
+    k = len(B)
+    n = len(B[0])
+    if len(target) != n:
+        raise ValueError("Dimension mismatch")
+
+    # Compute GSO
+    bstar = [[Fraction(0)] * n for _ in range(k)]
+    bstar_sq = [Fraction(0)] * k
+
+    for i in range(k):
+        vec = [Fraction(x) for x in B[i]]
+        for j in range(i):
+            if bstar_sq[j] == 0:
+                continue
+            mu = sum(Fraction(B[i][t]) * bstar[j][t] for t in range(n)) / bstar_sq[j]
+            vec = [vec[t] - mu * bstar[j][t] for t in range(n)]
+        bstar[i] = vec
+        bstar_sq[i] = sum(v * v for v in vec)
+
+    y = [Fraction(x) for x in target]
+    coeffs = [0] * k
+
+    for i in range(k - 1, -1, -1):
+        if bstar_sq[i] == 0:
+            continue
+        c = _nearest_int(sum(y[t] * bstar[i][t] for t in range(n)) / bstar_sq[i])
+        coeffs[i] = c
+        y = [y[t] - c * Fraction(B[i][t]) for t in range(n)]
+
+    v = [0] * n
+    for c, bi in zip(coeffs, B):
+        if c:
+            v = [vi + c * bij for vi, bij in zip(v, bi)]
+    return v
+
+def _smith_normal_form(A: Matrix[int]) -> tuple[Matrix[int], Matrix[int], Matrix[int]]:
+    """
+    Compute Smith normal form with unimodular transforms.
+
+    The Smith normal form S is a diagonal matrix with nonnegative entries
+    d_1, d_2, ..., d_r where each d_i divides d_{i+1}.
+
+    Returns matrices S, and transforms U, V where the transforms satisfy U @ A @ V = S.
+
+    Parameters
+    ----------
+    A : Matrix
+        Integer matrix
+
+    Returns
+    -------
+    S : Matrix
+        Diagonal matrix (Smith normal form)
+    U : Matrix
+        Unimodular left transform (determinant = +/-1)
+    V : Matrix
+        Unimodular right transform (determinant = +/-1)
+    """
+    if not A:
+        return [], [], []
+
+    M = [row[:] for row in A]
+    m, n = len(M), len(M[0])
+    U = [[1 if i == j else 0 for j in range(m)] for i in range(m)]
+    V = [[1 if i == j else 0 for j in range(n)] for i in range(n)]
+
+    i = j = 0
+    while i < m and j < n:
+        # Find smallest nonzero in active submatrix
+        best, best_abs = None, None
+        for r in range(i, m):
+            for c in range(j, n):
+                v = M[r][c]
+                if v != 0 and (best is None or abs(v) < best_abs):
+                    best, best_abs = (r, c), abs(v)
+        if best is None:
+            break
+
+        r0, c0 = best
+        if r0 != i:
+            M[i], M[r0] = M[r0], M[i]
+            U[i], U[r0] = U[r0], U[i]
+        if c0 != j:
+            _swap_cols(M, j, c0)
+            _swap_cols(V, j, c0)
+
+        while True:
+            pivot = M[i][j]
+            if pivot == 0:
+                break
+            if pivot < 0:
+                _row_scale(M, i, -1)
+                _row_scale(U, i, -1)
+                pivot = -pivot
+
+            swapped = False
+
+            # Clear column
+            for r in range(m):
+                if r == i:
+                    continue
+                while M[r][j] != 0:
+                    q = M[r][j] // pivot
+                    _row_add(M, r, i, -q)
+                    _row_add(U, r, i, -q)
+                    if 0 < abs(M[r][j]) < pivot:
+                        M[i], M[r] = M[r], M[i]
+                        U[i], U[r] = U[r], U[i]
+                        swapped = True
+                        break
+                if swapped:
+                    break
+                pivot = abs(M[i][j]) if M[i][j] != 0 else pivot
+            if swapped:
+                continue
+
+            # Clear row
+            pivot = M[i][j]
+            if pivot < 0:
+                _row_scale(M, i, -1)
+                _row_scale(U, i, -1)
+                pivot = -pivot
+            for c in range(n):
+                if c == j:
+                    continue
+                while M[i][c] != 0:
+                    q = M[i][c] // pivot
+                    _col_add(M, c, j, -q)
+                    _col_add(V, c, j, -q)
+                    if 0 < abs(M[i][c]) < pivot:
+                        _swap_cols(M, j, c)
+                        _swap_cols(V, j, c)
+                        swapped = True
+                        break
+                if swapped:
+                    break
+                pivot = abs(M[i][j]) if M[i][j] != 0 else pivot
+            if swapped:
+                continue
+
+            pivot = M[i][j]
+            if pivot == 0:
+                break
+            if pivot < 0:
+                _row_scale(M, i, -1)
+                _row_scale(U, i, -1)
+                pivot = -pivot
+
+            # Enforce divisibility
+            witness = None
+            for r in range(i, m):
+                for c in range(j, n):
+                    if M[r][c] % pivot != 0:
+                        witness = (r, c)
+                        break
+                if witness:
+                    break
+
+            if witness is None:
+                break
+
+            wr, wc = witness
+            if wc != j:
+                _col_add(M, j, wc, 1)
+                _col_add(V, j, wc, 1)
+            else:
+                _row_add(M, i, wr, 1)
+                _row_add(U, i, wr, 1)
+
+        i += 1
+        j += 1
+
+    # Normalize diagonal signs
+    for k in range(min(m, n)):
+        if M[k][k] < 0:
+            _row_scale(M, k, -1)
+            _row_scale(U, k, -1)
+
+    return M, U, V
+
+def _row_add(X: Matrix, i: int, k: int, t: int):
+    """
+    Add t times row k to row i.
+    """
+    if t != 0:
+        X[i] = [a + t * b for a, b in zip(X[i], X[k])]
+
+def _col_add(X: Matrix, j: int, k: int, t: int):
+    """
+    Add t times column k to column j.
+    """
+    if t != 0:
+        for row in X:
+            row[j] += t * row[k]
+
+def _row_scale(X: Matrix, i: int, s: int):
+    """
+    Scale row i by factor s.
+    """
+    if s != 1:
+        X[i] = [s * v for v in X[i]]
+
+def _swap_cols(X: Matrix, j: int, k: int):
+    """
+    Swap columns j and k.
+    """
+    for row in X:
+        row[j], row[k] = row[k], row[j]
+
+def _gso(B: Matrix[int]) -> tuple[list[list[Fraction]], list[Fraction]]:
+    """
+    Gram-Schmidt orthogonalization using exact rational arithmetic.
+    Returns (mu, bstar_sq) where mu[i][j] are the GSO coefficients
+    and bstar_sq[i] is ||b*_i||^2.
+    """
+    k = len(B)
+    if k == 0:
+        return [], []
+
+    n = len(B[0])
+    mu = [[Fraction(0)] * k for _ in range(k)]
+    bstar_sq = [Fraction(0)] * k
+    bstar = [[Fraction(0)] * n for _ in range(k)]
+
+    for i in range(k):
+        vec = [Fraction(x) for x in B[i]]
+        for j in range(i):
+            if bstar_sq[j] == 0:
+                continue
+            mu[i][j] = sum(
+                Fraction(B[i][t]) * bstar[j][t] for t in range(n)) / bstar_sq[j]
+            vec = [vec[t] - mu[i][j] * bstar[j][t] for t in range(n)]
+        bstar[i] = vec
+        bstar_sq[i] = sum(v * v for v in vec)
+
+    return mu, bstar_sq
+
+def _nearest_int(q: Fraction) -> int:
+    """
+    Round Fraction to nearest integer, ties away from zero.
+    """
+    if q >= 0:
+        return int(q + Fraction(1, 2))
+    return -int(-q + Fraction(1, 2))
+
+
+
+########################################################################
 ############################ Combinatorics #############################
 ########################################################################
 
@@ -3979,7 +4356,7 @@ def fibonacci_index(n: int) -> int:
 
     # Find the maximum exponent representation of n = base^exp
     base, exp = n, 1
-    while (power := perfect_power(base)) != (None, None):
+    while (power := perfect_power(base)) != (base, 1):
         base = power[0]
         exp *= power[1]
 
@@ -4063,261 +4440,8 @@ def is_polygonal(s: int, n: int) -> bool:
 
 
 ########################################################################
-############################ Linear Algebra ############################
-########################################################################
-
-def linear_solve(A: Matrix, b: Vector) -> Vector | None:
-    """
-    Solve the system of linear equations given by Ax = b.
-
-    Uses the Bareiss algorithm on integer matrices, and Gauss-Jordan elimination
-    otherwise. For underdetermined systems, returns a particular solution
-    (with free variables set to 0). Use nullspace(A) to get the homogeneous part.
-
-    Parameters
-    ----------
-    A : Matrix
-        M × N matrix of coefficients
-    b : Vector
-        List of M values
-
-    Returns
-    -------
-    Vector or None
-        A solution vector x such that Ax = b, or None if no solution exists.
-    """
-    if len(A) != len(b): raise ValueError("Matrix dimensions do not match")
-    if not A: return [] if not b else None
-
-    # Get reduced row-echelon form of augmented matrix [A | b]
-    augmented_matrix = [[*coefs, value] for coefs, value in zip(A, b)]
-    if all(isinstance(item, int) for row in augmented_matrix for item in row):
-        rref = _bareiss(augmented_matrix)
-    else:
-        rref = _gauss_jordan(augmented_matrix)
-
-    # Validate solution
-    num_variables = len(A[0])
-    pivot_value_by_col, pivot_cols = {}, set()
-    for row in rref:
-        lead = None
-        for i in range(num_variables):
-            if not is_zero(row[i]):
-                lead = i
-                break
-
-        if lead is None:
-            if not is_zero(row[-1]):
-                return None  # no solution
-        else:
-            pivot_cols.add(lead)
-            pivot_value_by_col[lead] = row[-1]
-
-    return [pivot_value_by_col.get(i, 0) for i in range(num_variables)]
-
-def nullspace(A: Matrix) -> list[Vector]:
-    """
-    Return a basis for the null space of A (the kernel of the linear map).
-    This is the set of all vectors x such that Ax = 0.
-
-    Parameters
-    ----------
-    A : Matrix
-        M × N matrix
-
-    Returns
-    -------
-    null_basis : list[Vector]
-        Basis vectors for the null space. 
-        Returns an empty list if only the trivial solution exists.
-    """
-    if not A: return []
-
-    num_cols = len(A[0])
-
-    # Get reduced row-echelon form
-    matrix = [row[:] for row in A]
-    if all(isinstance(x, int) for row in matrix for x in row):
-        rref = _bareiss(matrix)
-    else:
-        rref = _gauss_jordan(matrix)
-
-    # Find pivot columns
-    pivot_col_to_row = {}
-    for row_idx, row in enumerate(rref):
-        for i in range(num_cols):
-            if not is_zero(row[i]):
-                pivot_col_to_row[i] = row_idx
-                break
-
-    free_cols = [j for j in range(num_cols) if j not in pivot_col_to_row]
-
-    # Build null space basis (one vector per free variable)
-    basis = []
-    for free_col in free_cols:
-        vec = [0] * num_cols
-        vec[free_col] = 1
-        for pivot_col, row_idx in pivot_col_to_row.items():
-            vec[pivot_col] = -rref[row_idx][free_col]
-        basis.append(vec)
-
-    return basis
-
-def identity_matrix(n: int) -> Matrix:
-    """
-    Return the n × n identity matrix.
-    """
-    return [[int(i == j) for j in range(n)] for i in range(n)]
-
-def matrix_apply(function: Callable[[Number], Number], A: Matrix) -> Matrix:
-    """
-    Apply a function elementwise to a matrix A.
-    """
-    return [[function(x) for x in row] for row in A]
-
-def matrix_transpose(A: Matrix) -> Matrix:
-    """
-    Return the transpose of matrix A.
-    """
-    return [list(col) for col in zip(*A)]
-
-def matrix_sum(A: Matrix, B: Matrix) -> Matrix:
-    """
-    Return A + B.
-    """
-    return _matrix_binary_op(A, B, op=lambda a, b: a + b)
-
-def matrix_difference(A: Matrix, B: Matrix) -> Matrix:
-    """
-    Return A - B.
-    """
-    return _matrix_binary_op(A, B, op=lambda a, b: a - b)
-
-def matrix_product(A: Matrix, B: Matrix) -> Matrix:
-    """
-    Return the product of two matrices A and B.
-    """
-    if len(A[0]) != len(B): raise ValueError("Matrix dimensions do not match")
-    return [[sum(a*b for a, b in zip(row, col)) for col in zip(*B)] for row in A]
-
-def _matrix_binary_op(
-    A: Matrix,
-    B: Matrix,
-    op: Callable[[Number, Number], Number],
-) -> Matrix:
-    """
-    Apply a binary operation elementwise to two matrices A and B.
-    """
-    if len(A) != len(B) or len(A[0]) != len(B[0]):
-        raise ValueError("Matrix dimensions do not match")
-
-    return [[op(a, b) for a, b in zip(row_a, row_b)] for row_a, row_b in zip(A, B)]
-
-def _gauss_jordan(A: Matrix) -> Matrix:
-    """
-    Gauss-Jordan elimination. Returns the given matrix in reduced row-echelon form.
-
-    Complexity
-    ----------
-    O(m²n) time for an m × n matrix
-    """
-    num_rows, num_cols = len(A), len(A[0])
-    row = col = 0
-    while row < num_rows and col < num_cols - 1:
-        # Find pivot in current column
-        pivot_row = max(range(row, num_rows), key=lambda r: abs(A[r][col]))
-        if is_zero(A[pivot_row][col]):
-            col += 1
-            continue
-
-        # Move pivot row into position and normalize it
-        A[row], A[pivot_row] = A[pivot_row], A[row]
-        pivot = A[row][col]
-        A[row] = [value / pivot for value in A[row]]
-
-        # Eliminate the current column from all other rows
-        for r in range(num_rows):
-            if r == row: continue
-            if (k := A[r][col]) == 0: continue
-            A[r] = [value - k * pivot_value for value, pivot_value in zip(A[r], A[row])]
-
-        row += 1
-        col += 1
-
-    return A
-
-def _bareiss(A: Matrix) -> Matrix:
-    """
-    Bareiss algorithm (fraction-free Gaussian elimination).
-    Returns the matrix in row-echelon form using exact arithmetic.
-
-    Unlike Gauss-Jordan, rows are NOT normalized until the end,
-    and are returned as int or Fraction types. This avoids floating-point
-    errors for integer matrices.
-
-    See: https://www.ams.org/journals/mcom/1968-22-103/S0025-5718-1968-0226829-0/
-
-    Complexity
-    ----------
-    O(m²n) time for an m × n matrix
-    """
-    num_rows, num_cols = len(A), len(A[0])
-    prev_pivot = 1
-    pivot_row = 0
-
-    for col in range(num_cols - 1):
-        if pivot_row >= num_rows:
-            break
-
-        # Find non-zero pivot in current column
-        pivot_idx = None
-        for r in range(pivot_row, num_rows):
-            if A[r][col] != 0:
-                pivot_idx = r
-                break
-
-        if pivot_idx is None:
-            continue
-
-        # Swap pivot row into position
-        A[pivot_row], A[pivot_idx] = A[pivot_idx], A[pivot_row]
-        pivot = A[pivot_row][col]
-
-        # Eliminate below (and above for RREF-like form)
-        for r in range(num_rows):
-            if r == pivot_row: continue
-            if A[r][col] == 0: continue
-            factor = A[r][col]
-            for c in range(num_cols):
-                A[r][c] = (A[r][c] * pivot - A[pivot_row][c] * factor) // prev_pivot
-
-        prev_pivot = pivot
-        pivot_row += 1
-
-    # Normalize rows by leading coefficient
-    for row in A:
-        if (lead := next((x for x in row if x), None)) is None: continue
-        row[:] = [v // lead if v % lead == 0 else Fraction(v, lead) for v in row]
-
-    return A
-
-
-
-########################################################################
 ############################## Utilities ###############################
 ########################################################################
-
-def one(n: int) -> int:
-    """
-    The constant 1 function. Returns 1 for all inputs.
-    """
-    return 1
-
-def identity(n: int) -> int:
-    """
-    The identity function f(n) = n.
-    """
-    return n
 
 def nth(iterable: Iterable, n: int, default: Any = None) -> Any:
     """
@@ -4565,9 +4689,12 @@ def cubes(low: int = 0, high: int | None = None) -> Iterator[int]:
         n += 3*i*i + 3*i + 1
         i += 1
 
-def perfect_power(n: int) -> tuple[int | None, int | None]:
+def perfect_power(n: int) -> tuple[int, int]:
     """
-    Find integers a, b with b > 1 such that a^b = n (if any such integers exist).
+    Find integers a, b such that a^b = n.
+
+    Returns a solution (a, b) with b > 1 if there are any such solutions,
+    otherwise returns the trivial solution (n, 1).
 
     Parameters
     ----------
@@ -4581,19 +4708,12 @@ def perfect_power(n: int) -> tuple[int | None, int | None]:
 
     is_negative = n < 0
     n = -n if is_negative else n
+    for p in primes(high=n.bit_length()):
+        r = iroot(n, p)
+        if pow(r, p) == n:
+            return ((-r if is_negative else r), p)
 
-    # Squares only make sense for non-negative n (and we special-case them for speed)
-    if not is_negative:
-        r = isqrt(n)
-        if r * r == n:
-            return (r, 2)
-
-    for k in primes(low=3, high=n.bit_length()):
-        r = iroot(n, k)
-        if pow(r, k) == n:
-            return (-r if is_negative else r), k
-
-    return None, None
+    return (n, 1)
 
 def binary_search(
     f: Callable[[int], int],
@@ -4612,11 +4732,17 @@ def binary_search(
 
     return low + bisect.bisect_left(range(low, high + 1), threshold, key=f)
 
-def is_zero(x: Number, tol: float = 1e-12) -> bool:
+def _is_zero(x: Number, tol: float = 1e-12) -> bool:
     """
     Return whether the given number is zero (within a given tolerance).
     """
     return abs(x) < tol if isinstance(x, (float, complex)) else x == 0
+
+def _identity(n: int) -> int:
+    """
+    The identity function f(n) = n.
+    """
+    return n
 
 def _threshold_select(
     value: int,
@@ -4738,83 +4864,6 @@ def digit_permutations(n: int) -> Iterator[int]:
 ########################################################################
 ############################## Constants ###############################
 ########################################################################
-
-def _get_pool() -> multiprocessing.pool.Pool | None:
-    """
-    Get or create the persistent multiprocessing pool.
-    """
-    if getattr(multiprocessing.process.current_process(), '_inheriting', False):
-        return None
-    if multiprocessing.process.current_process()._config.get('daemon'):
-        return None
-
-    pool = None
-    state, touch = _get_pool_state()
-    with state['lock']:
-        if state['pid'] != os.getpid():
-            state['pid'], state['pool'] = os.getpid(), None
-            timer = state.get('timer')
-            if timer:
-                try: timer.cancel()
-                except Exception: pass
-            state['timer'] = None
-
-        pool = state.get('pool')
-        if not pool or getattr(pool, '_state', None) != multiprocessing.pool.RUN:
-            num_processes = min(8, multiprocessing.cpu_count())
-            pool = state['pool'] = state['context'].Pool(processes=num_processes)
-
-    touch()
-    return pool
-
-@singleton
-def _get_pool_state() -> dict[str, Any]:
-    """
-    Get or create state for the persistent multiprocessing pool.
-    """
-    try:
-        context = multiprocessing.get_context('forkserver')
-    except ValueError:
-        context = multiprocessing.get_context()
-
-    state = {
-        'pid': os.getpid(),
-        'context': context,
-        'pool': None,
-        'timer': None,
-        'lock': Lock(),
-    }
-
-    def shutdown():
-        with state['lock']:
-            timer, pool = state.get('timer'), state.get('pool')
-            state['timer'] = None
-            state['pool'] = None
-            if timer:
-                try: timer.cancel()
-                except Exception: pass
-            if pool:
-                try:
-                    pool.terminate()
-                    pool.join()
-                except Exception:
-                    pass
-
-    def touch():
-        with state['lock']:
-            if state.get('pool') is None:
-                return
-            timer = state.get('timer')
-            if timer:
-                try: timer.cancel()
-                except Exception: pass
-            timer = Timer(600, shutdown)
-            timer.daemon = True
-            state['timer'] = timer
-            timer.start()
-
-    atexit.register(shutdown)
-    return state, touch
 
 @singleton
 def _int_str_mod() -> int:
