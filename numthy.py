@@ -972,7 +972,7 @@ def _gen_prime_factors(n: int) -> Iterator[int]:
                 continue
 
             # ECM to peel off medium-sized factors
-            d = _ecm(n, max_curves=(32 if num_bits >= 160 else None))
+            d = _ecm(n, max_curves=(32 if num_bits >= 128 else None))
             if 1 < d < n:
                 stack.extend([d, n // d])
                 continue
@@ -2332,7 +2332,7 @@ def primitive_root(n: int) -> int | None:
         raise ValueError("Must have modulus |n| > 1")
     if n < 0:
         n = -n
-    if n in (1, 2, 4):
+    if n in (2, 4):
         return n - 1
 
     # Check if a primitive root exists
@@ -4250,7 +4250,7 @@ def lucas(n: int, P: int = 1, Q: int = -1, mod: int | None = None) -> int:
     if n < 0 and Q == 0:
         raise ValueError("Lucas sequence with Q=0 undefined for n < 0")
     elif n < 0 and mod is not None and gcd(Q, mod) != 1:
-        raise ValueError(f"Must have gcd(Q, mod) != 1 for n < 0")
+        raise ValueError(f"Must have gcd(Q, mod) = 1 for n < 0")
     elif n < 0:
         U = lucas(-n, P, Q, mod)
         if mod:
