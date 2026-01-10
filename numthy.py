@@ -14,13 +14,13 @@ import secrets
 import sys
 
 from collections import Counter, defaultdict, deque
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from fractions import Fraction
 from functools import lru_cache, partial, reduce
 from heapq import heappop, heappush
 from math import factorial, gcd, inf, isqrt, lcm, log, prod, sqrt
 from operator import mul, xor
-from typing import Any, Callable, Hashable, Iterable, Iterator, TypeAlias, TypeVar
+from typing import Any, Callable, Hashable, Iterator, TypeAlias, TypeVar
 
 
 
@@ -141,6 +141,8 @@ def next_prime(n: int) -> int:
 def random_prime(num_bits: int, *, safe: bool = False) -> int:
     """
     Generate a random prime with the given number of bits.
+
+    Uses 64 rounds of probabilistic Miller-Rabin to test primality.
 
     Parameters
     ----------
@@ -475,8 +477,8 @@ def _lmo(
     Returns the value of the prime counting function π(x), i.e. the number of
     primes less than or equal to x.
 
-    See: https://www.ams.org/journals/mcom/1985-44-170/
-    S0025-5718-1985-0777285-5/S0025-5718-1985-0777285-5.pdf
+    See: https://www-users.cse.umn.edu/~odlyzko/doc/arch/meissel.lehmer.pdf
+    See: https://arxiv.org/pdf/2111.15545
 
     Also includes a generalized version that calculates the sum F(x) = Σ f(p)
     for all primes p <= x, where f is any arbitrary completely multiplicative function.
@@ -2253,6 +2255,8 @@ def hensel(
     """
     if not is_prime(p):
         raise ValueError("p must be prime")
+    elif k < 1:
+        raise ValueError("Must have k >= 1")
 
     # Define polynomials f(x) and f'(x)
     f = polynomial(coefficients)
@@ -2265,9 +2269,7 @@ def hensel(
         solutions = {x % p for x in initial if f(x) % p == 0}
 
     # Exit early if no solutions or if the exponent is k = 1
-    if k <= 0 or not solutions:
-        return ()
-    if k == 1:
+    if not solutions or k == 1:
         return tuple(solutions)
 
     # Hensel lifting to find solutions to f(x) = 0 (mod p^k)
@@ -3798,16 +3800,16 @@ def _smith_normal_form(A: Matrix[int]) -> tuple[Matrix[int], Matrix[int], Matrix
         return [], [], []
 
     M = [row[:] for row in A]
-    m, n = len(M), len(M[0])
-    U = [[1 if i == j else 0 for j in range(m)] for i in range(m)]
-    V = [[1 if i == j else 0 for j in range(n)] for i in range(n)]
+    num_rows, num_cols = len(M), len(M[0])
+    U = [[1 if i == j else 0 for j in range(num_rows)] for i in range(num_rows)]
+    V = [[1 if i == j else 0 for j in range(num_cols)] for i in range(num_cols)]
 
     i = j = 0
-    while i < m and j < n:
+    while i < num_rows and j < num_cols:
         # Find smallest nonzero in active submatrix
         best, best_abs = None, None
-        for r in range(i, m):
-            for c in range(j, n):
+        for r in range(i, num_rows):
+            for c in range(j, num_cols):
                 v = M[r][c]
                 if v != 0 and (best is None or abs(v) < best_abs):
                     best, best_abs = (r, c), abs(v)
@@ -3822,19 +3824,17 @@ def _smith_normal_form(A: Matrix[int]) -> tuple[Matrix[int], Matrix[int], Matrix
             _swap_cols(M, j, c0)
             _swap_cols(V, j, c0)
 
-        while True:
-            pivot = M[i][j]
-            if pivot == 0:
-                break
+        while (pivot := M[i][j]) != 0:
             if pivot < 0:
                 _row_scale(M, i, -1)
                 _row_scale(U, i, -1)
                 pivot = -pivot
 
+            # When we perform a swap, move on to the next iteration
             swapped = False
 
             # Clear column
-            for r in range(m):
+            for r in range(num_rows):
                 if r == i:
                     continue
                 while M[r][j] != 0:
@@ -3858,9 +3858,8 @@ def _smith_normal_form(A: Matrix[int]) -> tuple[Matrix[int], Matrix[int], Matrix
                 _row_scale(M, i, -1)
                 _row_scale(U, i, -1)
                 pivot = -pivot
-            for c in range(n):
-                if c == j:
-                    continue
+            for c in range(num_cols):
+                if c == j: continue
                 while M[i][c] != 0:
                     q = M[i][c] // pivot
                     _col_add(M, c, j, -q)
@@ -3876,9 +3875,7 @@ def _smith_normal_form(A: Matrix[int]) -> tuple[Matrix[int], Matrix[int], Matrix
             if swapped:
                 continue
 
-            pivot = M[i][j]
-            if pivot == 0:
-                break
+            if (pivot := M[i][j]) == 0: break
             if pivot < 0:
                 _row_scale(M, i, -1)
                 _row_scale(U, i, -1)
@@ -3886,8 +3883,8 @@ def _smith_normal_form(A: Matrix[int]) -> tuple[Matrix[int], Matrix[int], Matrix
 
             # Enforce divisibility
             witness = None
-            for r in range(i, m):
-                for c in range(j, n):
+            for r in range(i, num_rows):
+                for c in range(j, num_cols):
                     if M[r][c] % pivot != 0:
                         witness = (r, c)
                         break
@@ -3909,7 +3906,7 @@ def _smith_normal_form(A: Matrix[int]) -> tuple[Matrix[int], Matrix[int], Matrix
         j += 1
 
     # Normalize diagonal signs
-    for k in range(min(m, n)):
+    for k in range(min(num_rows, num_cols)):
         if M[k][k] < 0:
             _row_scale(M, k, -1)
             _row_scale(U, k, -1)
@@ -4703,12 +4700,6 @@ def binary_search(
         high = low + span
 
     return low + bisect.bisect_left(range(low, high + 1), threshold, key=f)
-
-def _is_zero(x: Number, tol: float = 1e-12) -> bool:
-    """
-    Return whether the given number is zero (within a given tolerance).
-    """
-    return abs(x) < tol if isinstance(x, (float, complex)) else x == 0
 
 def _identity(n: int) -> int:
     """
