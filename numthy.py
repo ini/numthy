@@ -13,7 +13,7 @@ import itertools
 import secrets
 import sys
 
-from collections import Counter, defaultdict, deque, namedtuple
+from collections import Counter, defaultdict, deque
 from collections.abc import Sequence
 from fractions import Fraction
 from functools import lru_cache, partial, reduce
@@ -1207,9 +1207,9 @@ def _ecm(
             return g
         if g == n:
             # Rare degeneracy; try to salvage.
-            g2 = gcd(Q[0], n)
-            if 1 < g2 < n:
-                return g2
+            gg = gcd(Q[0], n)
+            if 1 < gg < n:
+                return gg
             continue
 
         # Stage 2
@@ -1233,14 +1233,12 @@ def _montgomery_add(
 
     See: https://www.hyperelliptic.org/EFD/g1p/auto-montgom-xz.html
     """
-    (X1, Z1), (X2, Z2) = P, Q
-    Xd, Zd = diff
-    A, B = X1 + Z1, X1 - Z1
-    C, D = X2 + Z2, X2 - Z2
+    A, B = P[0] + P[1], P[0] - P[1]
+    C, D = Q[0] + Q[1], Q[0] - Q[1]
     DA, CB = D*A % mod, C*B % mod
     plus, minus = DA + CB, DA - CB
-    X3 = (Zd * ((plus * plus) % mod)) % mod
-    Z3 = (Xd * ((minus * minus) % mod)) % mod
+    X3 = (diff[1] * ((plus * plus) % mod)) % mod
+    Z3 = (diff[0] * ((minus * minus) % mod)) % mod
     return X3, Z3
 
 def _montgomery_double(
@@ -1255,8 +1253,7 @@ def _montgomery_double(
 
     See: https://www.hyperelliptic.org/EFD/g1p/auto-montgom-xz.html
     """
-    X, Z = P
-    A, B = X + Z, X - Z
+    A, B = P[0] + P[1], P[0] - P[1]
     AA, BB = (A * A) % mod, (B * B) % mod
     C = AA - BB
     X2 = (AA * BB) % mod
@@ -1280,13 +1277,13 @@ def _montgomery_ladder(
     # Initialize with leading bit handled: R0 = P, R1 = 2P
     R0 = diff = (P[0] % mod, P[1] % mod)
     R1 = _montgomery_double(diff, A24, mod)
-    for bit in bin(k)[3:]:  # skip '0b' and leading 1
-        if bit == '0':
-            R1 = _montgomery_add(R0, R1, diff, mod)
-            R0 = _montgomery_double(R0, A24, mod)
-        else:
+    for bit in format(k, 'b')[1:]:
+        if bit != '0':
             R0 = _montgomery_add(R0, R1, diff, mod)
             R1 = _montgomery_double(R1, A24, mod)
+        else:
+            R1 = _montgomery_add(R0, R1, diff, mod)
+            R0 = _montgomery_double(R0, A24, mod)
 
     return R0
 
@@ -1403,6 +1400,7 @@ def _ecm_stage_2(
     ECM stage 2 using Montgomery baby-step / giant-step.
     Returns a non-trivial factor of n if found, otherwise 1.
     """
+    O = (1, 0)  # point at infinity
     D, giant_step_to_offsets, baby_steps = plan # D is giant-step size
     if not D or not giant_step_to_offsets:
         return 1  # failure, return trivial factor
@@ -1420,82 +1418,54 @@ def _ecm_stage_2(
             prev, current, d = current, _montgomery_add(current, Q2, prev, n), d + 2
 
     # Fallback for any missing values
+    baby[0] = O
     baby.update({d: _montgomery_ladder(d, Q, A24, n) for d in baby_steps - baby.keys()})
 
     # Giant step base [D]Q
     PD = _montgomery_ladder(D, Q, A24, n)
-    k_max = max(giant_step_to_offsets)
+    for k in range(max(giant_step_to_offsets) + 1):
+        if k == 0:
+            P_prev, P_current = None, O
+        elif k == 1:
+            P_prev, P_current = O, PD
+        elif k == 2:
+            P_prev, P_current = PD, _montgomery_double(PD, A24, n)
+        else:
+            # Handle k >= 3 with primes p = kD ± d, via differential addition
+            P_prev, P_current = P_current, _montgomery_add(P_current, PD, P_prev, n)
 
-    # Batch GCD: accumulate Z-coordinates, and compute gcd(product, n) once instead of
-    # many individual GCDs. Chunk size 512 balances batching vs early termination.
-    chunk: list[int] = []
+        # Cross-ratio trick: in x-only Montgomery, we can't compute [kD±d]Q
+        # directly, but (Xk*Zd - Xd*Zk) vanishes iff the points combine to
+        # give a Z-coordinate sharing a factor with n
+        if k in giant_step_to_offsets:
+            Pk = P_current
+            values = [
+                (Pk[0]*baby[d][1] - baby[d][0]*Pk[1]) % n
+                for d in giant_step_to_offsets[k]
+            ]
+            if (g := _batch_gcd(values, n)) > 1: return g
 
-    def flush() -> int:
-        g = _batch_gcd(chunk, n) if chunk else 1
-        chunk.clear()
-        return g if 1 < g < n else 1
-
-    def collect(k: int, Pk: tuple[int, int]) -> int:
-        """
-        Accumulate checks for primes p = kD ± d. Returns factor if found.
-        """
-        if k not in giant_step_to_offsets: return 1
-        Xk, Zk = Pk
-        for d in giant_step_to_offsets[k]:
-            if d == 0:
-                chunk.append(Zk)
-            else:
-                # Cross-ratio trick: in x-only Montgomery, we can't compute [kD±d]Q
-                # directly, but (Xk*Zd - Xd*Zk) vanishes iff the points combine to
-                # give a Z-coordinate sharing a factor with n
-                Xd, Zd = baby[d]
-                chunk.append((Xk*Zd - Xd*Zk) % n)
-
-        return flush() if len(chunk) >= 512 else 1
-
-    # Check k = 0 with primes p = d
-    if 0 in giant_step_to_offsets:
-        chunk.extend([baby.get(d, (1, 0))[1] for d in giant_step_to_offsets[0] if d])
-        if (g := flush()) > 1:
-            return g
-
-    # Check k = 1 with primes p = D ± d
-    if (g := collect(1, PD)) > 1: return g
-    if k_max == 1: return flush()
-
-    # Check k = 2 with primes p = 2D ± d via doubling, not differential addition, as
-    # diff = [D]Q - [D]Q = O (point at infinity) means Montgomery's formula is undefined
-    P_prev, P_current = PD, _montgomery_double(PD, A24, n)
-    if (g := collect(2, P_current)) > 1: return g
-
-    # Handle k >= 3 with primes p = kD ± d, via differential addition
-    # [kD]Q = [(k-1)D]Q + [D]Q with diff = [(k-2)D]Q (always a valid point)
-    for k in range(3, k_max + 1):
-        P_prev, P_current = P_current, _montgomery_add(P_current, PD, P_prev, n)
-        if (g := collect(k, P_current)) > 1: return g
-
-    return flush()
+    return 1
 
 def _batch_gcd(values: list[int], mod: int) -> int:
     """
     Compute gcd(prod(values), mod) with a fallback to per-value gcd when the product
     vanishes with respect to the modulus.
     """
-    if not values:
-        return 1
-    prod_mod = 1
-    for v in values:
-        prod_mod = (prod_mod * (v % mod)) % mod
-
-    g = gcd(prod_mod, mod)
-    if 1 < g < mod:
-        return g
-    if g == mod:
-        # Degenerate: isolate a factor by checking individually.
+    if values:
+        product = 1
         for v in values:
-            gg = gcd(v, mod)
-            if 1 < gg < mod:
-                return gg
+            product = (product * v) % mod
+
+        if 1 < (g := gcd(product, mod)) < mod:
+            return g
+
+        # Check values individually
+        if g == mod:
+            for v in values:
+                if 1 < (gg := gcd(v, mod)) < mod:
+                    return gg
+
     return 1
 
 def _siqs(
@@ -2358,8 +2328,8 @@ def primitive_root(n: int) -> int | None:
     n : int
         Integer modulus
     """
-    if n == 0:
-        raise ZeroDivisionError("Modulus n must be nonzero")
+    if -1 <= n <= 1:
+        raise ValueError("Must have modulus |n| > 1")
     if n < 0:
         n = -n
     if n in (1, 2, 4):
@@ -4277,9 +4247,11 @@ def lucas(n: int, P: int = 1, Q: int = -1, mod: int | None = None) -> int:
     mod : int
         Optional modulus
     """
-    if n < 0:
-        if Q == 0:
-            raise ValueError("Lucas sequence with Q=0 undefined for negative indices")
+    if n < 0 and Q == 0:
+        raise ValueError("Lucas sequence with Q=0 undefined for n < 0")
+    elif n < 0 and mod is not None and gcd(Q, mod) != 1:
+        raise ValueError(f"Must have gcd(Q, mod) != 1 for n < 0")
+    elif n < 0:
         U = lucas(-n, P, Q, mod)
         if mod:
             return (-U * pow(Q, n, mod)) % mod
@@ -4288,9 +4260,9 @@ def lucas(n: int, P: int = 1, Q: int = -1, mod: int | None = None) -> int:
             if U % divisor != 0:
                 raise ValueError(f"U_{n}(P={P}, Q={Q}) is not an integer")
             return -U // divisor
-    if n == 0:
+    elif n == 0:
         return 0
-    if n == 1:
+    elif n == 1:
         return 1 % mod if mod else 1
 
     # Fast doubling via binary representation
