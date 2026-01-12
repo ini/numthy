@@ -18,7 +18,7 @@ from collections.abc import Iterable, Sequence
 from fractions import Fraction
 from functools import lru_cache, partial, reduce
 from heapq import heappop, heappush
-from math import factorial, gcd, inf, isqrt, lcm, log, prod, sqrt
+from math import ceil, factorial, gcd, inf, isqrt, lcm, log, prod, sqrt
 from operator import mul, xor
 from typing import Any, Callable, Collection, Hashable, Iterator, TypeAlias, TypeVar
 
@@ -41,13 +41,13 @@ __all__ = [
     'divisor_function', 'divisor_count_range', 'divisor_function_range',
     'aliquot_sum_range', 'totient', 'totient_range', 'carmichael',
     # Modular Arithmetic
-    'egcd', 'crt', 'hensel', 'multiplicative_order', 'primitive_root',
+    'egcd', 'crt', 'multiplicative_order', 'primitive_root',
     'legendre', 'jacobi', 'kronecker', 'dirichlet_character',
-    # Exponential Congruences
-    'discrete_log', 'modular_roots',
+    # Nonlinear Congruences
+    'hensel', 'discrete_log', 'modular_roots',
     # Diophantine Equations
-    'bezout', 'cornacchia', 'pell', 'binary_quadratic_solve',
-    'pythagorean_triples', 'periodic_continued_fraction', 'convergents',
+    'bezout', 'pythagorean_triples', 'cornacchia', 'pell',
+    'binary_quadratic_solve', 'pillai',
     # Lattice Methods
     'integer_solve', 'integer_nullspace', 'lll_reduce', 'babai_closest_vector',
     # Combinatorics
@@ -58,9 +58,10 @@ __all__ = [
     'lucas', 'fibonacci', 'fibonacci_index', 'fibonacci_numbers',
     'polygonal', 'polygonal_index', 'polygonal_numbers', 'is_polygonal',
     # Appendix
-    'nth', 'alternating', 'group_by_key', 'group_permutations', 'permutation',
+    'nth', 'alternating', 'periodic_continued_fraction', 'convergents',
+    'group_by_key', 'group_permutations', 'permutation',
     'powerset', 'disjoint_subset_pairs', 'polynomial', 'iroot', 'ilog',
-    'is_square', 'non_squares', 'squares', 'cubes', 'perfect_power', 'binary_search',
+    'is_square', 'non_squares', 'squares', 'perfect_power', 'binary_search',
     'digit_sum', 'digit_count', 'digit_combinations', 'digit_permutations',
 ]
 
@@ -1258,11 +1259,7 @@ def _montgomery_add(
     Z3 = (diff[0] * ((minus * minus) % mod)) % mod
     return X3, Z3
 
-def _montgomery_double(
-    P: tuple[int, int],
-    A24: int,
-    mod: int,
-) -> tuple[int, int]:
+def _montgomery_double(P: tuple[int, int], A24: int, mod: int) -> tuple[int, int]:
     """
     Montgomery curve point doubling in projective x-only coordinates.
     Point P is represented as (X:Z) with affine x = X/Z.
@@ -1417,7 +1414,6 @@ def _ecm_stage_2(
     ECM stage 2 using Montgomery baby-step / giant-step.
     Returns a non-trivial factor of n if found, otherwise 1.
     """
-    O = (1, 0)  # point at infinity
     D, giant_step_to_offsets, baby_steps = plan # D is giant-step size
     if not D or not giant_step_to_offsets:
         return 1  # failure, return trivial factor
@@ -1435,7 +1431,7 @@ def _ecm_stage_2(
             prev, current, d = current, _montgomery_add(current, Q2, prev, n), d + 2
 
     # Fallback for any missing values
-    baby[0] = O
+    baby[0] = O = (1, 0)  # point at infinity
     baby.update({d: _montgomery_ladder(d, Q, A24, n) for d in baby_steps - baby.keys()})
 
     # Giant step base [D]Q
@@ -1476,8 +1472,6 @@ def _batch_gcd(values: list[int], mod: int) -> int:
 
         if 1 < (g := gcd(product, mod)) < mod:
             return g
-
-        # Check values individually
         if g == mod:
             for v in values:
                 if 1 < (gg := gcd(v, mod)) < mod:
@@ -1663,8 +1657,7 @@ def _gen_polynomials(
 @small_cache
 def _byte_subtraction_table(d: int) -> bytes:
     """
-    Translation table for byte subtraction.
-    Maps byte v to max(0, v - d).
+    Translation table for byte subtraction. Maps byte v to max(0, v - d).
     """
     return bytes(max(0, v - d) for v in range(256))
 
@@ -1833,27 +1826,20 @@ def _get_large_primes(
     Returns tuple of up to `max_count` primes if v factors completely
     over `possible_large_primes`, otherwise returns None.
     """
-    if not possible_large_primes:
-        return None
-
-    L = possible_large_primes[-1]
     if v == 1:
         return ()
-    if v <= L:
-        return (v,) if is_prime(v) else None
-    if max_count <= 1:
+    if not possible_large_primes or max_count < 1:
         return None
 
     # Try to extract a large prime factor and recurse
     for p in possible_large_primes:
         if p * p > v: break
         if v % p == 0:
-            rest = _get_large_primes(
-                v // p, possible_large_primes, max_count - 1)
+            rest = _get_large_primes(v // p, possible_large_primes, max_count - 1)
             if rest is not None:
-                return tuple(sorted((p,) + rest))
+                return (p,) + rest
 
-    return None
+    return (v,) if v <= possible_large_primes[-1] and is_prime(v) else None
 
 def _nullspace_gf2(rows: list[int]) -> list[int]:
     """
@@ -2240,74 +2226,6 @@ def crt(residues: Iterable[int], moduli: Iterable[int]) -> int | None:
     except _NoSolutionError:
         return None
 
-def hensel(
-    coefficients: Sequence[int],
-    p: int,
-    k: int,
-    initial: Iterable[int] | None = None,
-) -> tuple[int, ...]:
-    """
-    Find all solutions to the polynomial congruence f(x) ≡ 0 (mod p^k).
-
-    Assumes f(x) = a_0 + a_1x + a_2x^2 + a_3x^3 ... is a polynomial.
-    Uses Hensel lifting to find solutions.
-
-    Parameters
-    ----------
-    coefficients : Sequence[int]
-        Polynomial coefficients, where coefficients[i] is the coefficient for x^i
-    p : int
-        Prime base of modulus
-    k : int
-        Exponent of modulus
-    initial : list[int]
-        Initial solutions to f(x) ≡ 0 (mod p)
-
-    Complexity
-    ----------
-    O(ksd) time, where s is total number of solutions and d = deg(f).
-    O(pd) to find initial solutions if not provided.
-    """
-    if not is_prime(p):
-        raise ValueError("p must be prime")
-    elif k < 1:
-        raise ValueError("Must have k >= 1")
-
-    # Define polynomials f(x) and f'(x)
-    f = polynomial(coefficients)
-    df = polynomial([i * coefficients[i] for i in range(1, len(coefficients))])
-
-    # Find initial solutions to f(x) = 0 (mod p)
-    if initial is None:
-        solutions = {x for x in range(p) if f(x) % p == 0}
-    else:
-        solutions = {x % p for x in initial if f(x) % p == 0}
-
-    # Exit early if no solutions or if the exponent is k = 1
-    if not solutions or k == 1:
-        return tuple(solutions)
-
-    # Hensel lifting to find solutions to f(x) = 0 (mod p^k)
-    mod = p
-    for _ in range(k - 1):
-        new_solutions, new_mod = set(), mod * p
-        for root in solutions:
-            f_val = f(root) % new_mod
-            f_coeff, df_mod = (f_val // mod) % p, df(root) % p
-            if df_mod != 0:
-                # Simple root, unique lift
-                t = (-f_coeff * pow(df_mod, -1, p)) % p
-                new_solutions.add((root + t*mod) % new_mod)
-            elif f_coeff == 0:
-                # Multiple root, p lifts
-                new_solutions.update((root + t*mod) % new_mod for t in range(p))
-
-        solutions, mod = new_solutions, new_mod
-        if not solutions:
-            break
-
-    return tuple(root % mod for root in solutions)
-
 def multiplicative_order(a: int, mod: int) -> int:
     """
     Return the smallest integer k = ord_n(a) such that a^k ≡ 1 (mod n).
@@ -2663,8 +2581,76 @@ def _dirichlet_log_cache(a: int, b: int, mod: int) -> int | None:
 
 
 ########################################################################
-######################## Exponential Congruences #######################
+######################### Nonlinear Congruences ########################
 ########################################################################
+
+def hensel(
+    coefficients: Sequence[int],
+    p: int,
+    k: int,
+    initial: Iterable[int] | None = None,
+) -> tuple[int, ...]:
+    """
+    Find all solutions to the polynomial congruence f(x) ≡ 0 (mod p^k).
+
+    Assumes f(x) = a_0 + a_1x + a_2x^2 + a_3x^3 ... is a polynomial.
+    Uses Hensel lifting to find solutions.
+
+    Parameters
+    ----------
+    coefficients : Sequence[int]
+        Polynomial coefficients, where coefficients[i] is the coefficient for x^i
+    p : int
+        Prime base of modulus
+    k : int
+        Exponent of modulus
+    initial : list[int]
+        Initial solutions to f(x) ≡ 0 (mod p)
+
+    Complexity
+    ----------
+    O(ksd) time, where s is total number of solutions and d = deg(f).
+    O(pd) to find initial solutions if not provided.
+    """
+    if not is_prime(p):
+        raise ValueError("p must be prime")
+    elif k < 1:
+        raise ValueError("Must have k >= 1")
+
+    # Define polynomials f(x) and f'(x)
+    f = polynomial(coefficients)
+    df = polynomial([i * coefficients[i] for i in range(1, len(coefficients))])
+
+    # Find initial solutions to f(x) = 0 (mod p)
+    if initial is None:
+        solutions = {x for x in range(p) if f(x) % p == 0}
+    else:
+        solutions = {x % p for x in initial if f(x) % p == 0}
+
+    # Exit early if no solutions or if the exponent is k = 1
+    if not solutions or k == 1:
+        return tuple(solutions)
+
+    # Hensel lifting to find solutions to f(x) = 0 (mod p^k)
+    mod = p
+    for _ in range(k - 1):
+        new_solutions, new_mod = set(), mod * p
+        for root in solutions:
+            f_val = f(root) % new_mod
+            f_coeff, df_mod = (f_val // mod) % p, df(root) % p
+            if df_mod != 0:
+                # Simple root, unique lift
+                t = (-f_coeff * pow(df_mod, -1, p)) % p
+                new_solutions.add((root + t*mod) % new_mod)
+            elif f_coeff == 0:
+                # Multiple root, p lifts
+                new_solutions.update((root + t*mod) % new_mod for t in range(p))
+
+        solutions, mod = new_solutions, new_mod
+        if not solutions:
+            break
+
+    return tuple(root % mod for root in solutions)
 
 def discrete_log(a: int, b: int, mod: int) -> int | None:
     """
@@ -3242,6 +3228,67 @@ def bezout(a: int, b: int, c: int) -> Iterator[tuple[int, int]]:
         yield (x0 + k * step_x, y0 - k * step_y)
         yield (x0 - k * step_x, y0 + k * step_y)
 
+def pythagorean_triples(
+    max_c: float | None = None,
+    max_sum: float | None = None,
+) -> Iterator[tuple[int, int, int]]:
+    """
+    Generate positive integer solutions to the equation a^2 + b^2 = c^2.
+
+    Uses Euclid's formula to generate unique Pythagorean triples (a, b, c)
+    where a <= b <= c.
+
+    If no bounds are specified, infinitely generates triples in order of increasing c.
+    When bounds are specified, no order is guaranteed.
+
+    Parameters
+    ----------
+    max_c : float
+        Upper bound for c in generated triples, where c <= max_c
+    max_sum : float
+        Upper bound for the sum of generated triples, where a + b + c <= max_sum
+    """
+    max_m = None
+    if max_c is not None:
+        max_c = int(max_c)
+        max_m = min(max_m or inf, isqrt(max_c))
+    if max_sum is not None:
+        max_sum = int(max_sum)
+        max_m = min(max_m or inf, isqrt(max_sum // 2))
+
+    # Bounded case
+    if max_m is not None:
+        for a, b, c in _euclid(max_m=max_m):
+            # Generate multiples of primitive triple
+            if max_c is not None and max_sum is not None:
+                max_k = min(max_c // c, max_sum // (a + b + c))
+            elif max_sum is not None:
+                max_k = max_sum // (a + b + c)
+            else:
+                max_k = max_c // c
+            for k in range(1, int(max_k) + 1):
+                yield (k*a, k*b, k*c)
+
+        return
+
+    # Unbounded case
+    queue = []  # (current_c, k, a0, b0, c0)
+    primitive_triples = _berggren()
+    a0, b0, c0 = next(primitive_triples)
+    while True:
+        # Queue primitive triples (a0, b0, c0)
+        while not queue or c0 <= queue[0][0]:
+            heappush(queue, (c0, 1, a0, b0, c0))
+            a0, b0, c0 = next(primitive_triples)
+
+        # Yield the next triple (ka, kb, kc)
+        _, k, a, b, c = heappop(queue)
+        yield (k*a, k*b, k*c)
+
+        # Queue the next multiple of (a, b, c)
+        k += 1
+        heappush(queue, (k*c, k, a, b, c))
+
 def cornacchia(d: int, m: int) -> Iterator[tuple[int, int]]:
     """
     Generate positive integer solutions to the equation x^2 + dy^2 = m
@@ -3322,7 +3369,7 @@ def pell(D: int, N: int = 1) -> Iterator[tuple[int, int]]:
     Generate positive integer solutions to the generalized Pell equation x^2 - Dy^2 = N
     where D is not a perfect square.
 
-    Yields positive integer solutions x, y > 0 in order of increasing x.
+    Yields infinite positive integer solutions x, y > 0 in order of increasing x.
     Uses the Lagrange-Matthews-Mollin (LMM) algorithm.
 
     See: https://cjhb.site/Files.php/Books/math/B3.4/pell.pdf
@@ -3371,6 +3418,7 @@ def pell(D: int, N: int = 1) -> Iterator[tuple[int, int]]:
         if (N // f) % f != 0:
             continue
 
+        # Iterate over modular roots
         m = abs(N // (f * f))
         for z in modular_roots(D, 2, mod=m):
             z = z if z <= m // 2 else z - m
@@ -3419,7 +3467,7 @@ def binary_quadratic_solve(a: int, b: int, c: int, n: int) -> Iterator[tuple[int
 
     Uses the theory of binary quadratic forms to find solutions based on the
     discriminant Δ = b^2 - 4ac:
-        
+
         Δ < 0: definite form, finite solutions (via Cornacchia)
         Δ = 0: parabolic form, reduces to linear (via Bezout's identity)
         Δ > 0, square: degenerate form, factors into linear forms
@@ -3462,143 +3510,124 @@ def binary_quadratic_solve(a: int, b: int, c: int, n: int) -> Iterator[tuple[int
     # Dispatch based on discriminant Δ = b^2 - 4ac
     discriminant = b*b - 4*a*c
     if discriminant < 0:
-        yield from _solve_definite(a, b, c, n)
+        yield from _solve_bqf_definite(a, b, c, n)
     elif discriminant == 0:
-        yield from _solve_parabolic(a, b, c, n)
+        yield from _solve_bqf_parabolic(a, b, c, n)
     elif is_square(discriminant):
-        yield from _solve_degenerate(a, b, c, n)
+        yield from _solve_bqf_degenerate(a, b, c, n)
     else:
-        yield from _solve_indefinite(a, b, c, n)
+        yield from _solve_bqf_indefinite(a, b, c, n)
 
-def pythagorean_triples(
-    max_c: float | None = None,
-    max_sum: float | None = None,
-) -> Iterator[tuple[int, int, int]]:
+def pillai(a: int, b: int, c: int) -> Iterator[tuple[int, int]]:
     """
-    Generate positive integer solutions to the equation a^2 + b^2 = c^2.
-
-    Uses Euclid's formula to generate unique Pythagorean triples (a, b, c)
-    where a <= b <= c.
-
-    If no bounds are specified, infinitely generates triples in order of increasing c.
-    When bounds are specified, no order is guaranteed.
+    Generate all positive integer solutions (x, y) to the Pillai equation a^x - b^y = c,
+    where a, b >= 2 and x, y > 0.
 
     Parameters
     ----------
-    max_c : float
-        Upper bound for c in generated triples, where c <= max_c
-    max_sum : float
-        Upper bound for the sum of generated triples, where a + b + c <= max_sum
-    """
-    max_m = None
-    if max_c is not None:
-        max_c = int(max_c)
-        max_m = min(max_m or inf, isqrt(max_c))
-    if max_sum is not None:
-        max_sum = int(max_sum)
-        max_m = min(max_m or inf, isqrt(max_sum // 2))
-
-    # Bounded case
-    if max_m is not None:
-        for a, b, c in _euclid(max_m=max_m):
-            # Generate multiples of primitive triple
-            if max_c is not None and max_sum is not None:
-                max_k = min(max_c // c, max_sum // (a + b + c))
-            elif max_sum is not None:
-                max_k = max_sum // (a + b + c)
-            else:
-                max_k = max_c // c
-            for k in range(1, int(max_k) + 1):
-                yield (k*a, k*b, k*c)
-
-        return
-
-    # Unbounded case
-    queue = []  # (current_c, k, a0, b0, c0)
-    primitive_triples = _berggren()
-    a0, b0, c0 = next(primitive_triples)
-    while True:
-        # Queue primitive triples (a0, b0, c0)
-        while not queue or c0 <= queue[0][0]:
-            heappush(queue, (c0, 1, a0, b0, c0))
-            a0, b0, c0 = next(primitive_triples)
-
-        # Yield the next triple (ka, kb, kc)
-        _, k, a, b, c = heappop(queue)
-        yield (k*a, k*b, k*c)
-
-        # Queue the next multiple of (a, b, c)
-        k += 1
-        heappush(queue, (k*c, k, a, b, c))
-
-def periodic_continued_fraction(
-    D: int,
-    P: int = 0,
-    Q: int = 1,
-) -> tuple[Iterator[int], int, int]:
-    """
-    Compute coefficients for the periodic continued fraction
-    (P + sqrt(D)) / Q = a0 + 1 / (a1 + 1 / (a2 + ...)).
-
-    Returns
-    -------
-    coefficients : Iterator[int]
-        Coefficients of the continued fraction
-    initial_length : int
-        Length of the initial non-repeating block
-    period_length : int
-        Length of the repeating period
-    """
-    if is_square(D) or D <= 0:
-        raise ValueError("D must be a non-square positive integer.")
-
-    coefficients, index, sqrt_D = [], {}, isqrt(D)
-    a = (sqrt_D + P) // Q
-    while (P, Q, a) not in index:
-        index[P, Q, a] = len(coefficients)
-        coefficients.append(a)
-        P = a*Q - P
-        Q = (D - P*P) // Q
-        a = (sqrt_D + P) // Q
-
-    period_length = len(coefficients) - index[P, Q, a]
-    initial_length = len(coefficients) - period_length
-    coefficients = itertools.chain(
-        coefficients[:initial_length],
-        itertools.cycle(coefficients[initial_length:])
-    )
-
-    return coefficients, initial_length, period_length
-
-def convergents(
-    coefficients: Iterable[int],
-    num: int | None = None,
-) -> Iterator[tuple[int, int]]:
-    """
-    Return convergents of the continued fraction with the given coefficients.
-
-    Parameters
-    ----------
-    coefficients : Iterable[int]
-        Coefficients of the continued fraction
-    num : int
-        Maximum number of convergents to generate (infinite by default)
+    a : int
+        Base of x term
+    b : int
+        Base of y term
+    c : int
+        Integer target
 
     Yields
     ------
-    numerator : int
-        Numerator of the convergent
-    denominator : int
-        Denominator of the convergent
+    x : int
+        X-coordinate of solution
+    y : int
+        Y-coordinate of solution
     """
-    A, A_prev = 1, 0
-    B, B_prev = 0, 1
-    for a in itertools.islice(coefficients, num):
-        A, A_prev = a * A + A_prev, A
-        B, B_prev = a * B + B_prev, B
-        yield A, B
+    if a < 2 or b < 2:
+        raise ValueError("Bases a and b must be >= 2")
 
-def _solve_definite(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int]]:
+    # Use Baker-type bound for provable completeness
+    x_max = _pillai_bound(a, b, c)
+    a_x_max = pow(a, x_max)
+    if a_x_max <= c:
+        return
+    y_max = ilog(a_x_max - c, b)
+
+    # Select primes p where gcd(p, ab) = 1 and compute multiplicative orders
+    max_prime_count = max(3, y_max.bit_length() // 4)
+    sieve_primes, orders, modulus = [], [], 1
+    for p in primes(low=max(1000, y_max)):
+        if a % p == 0 or b % p == 0: continue
+        order = multiplicative_order(a, p)
+        new_lcm = lcm(modulus, order)
+        if new_lcm > modulus:
+            modulus = new_lcm
+            sieve_primes.append(p)
+            orders.append(order)
+        if len(sieve_primes) >= max_prime_count or modulus > y_max:
+            break
+
+    # Use discrete log sieve with CRT
+    a_mod = [a % p for p in sieve_primes]
+    b_mod = [b % p for p in sieve_primes]
+    c_mod = [c % p for p in sieve_primes]
+    b_pow_y, b_pow_y_mod = b, [b % p for p in sieve_primes]
+    solutions = []
+    for y in range(1, y_max + 1):
+        residual = c + b_pow_y  # a^x = c + b^y
+        if residual > 0:
+            congruences = []
+            for i, p in enumerate(sieve_primes):
+                target_mod_p = (c_mod[i] + b_pow_y_mod[i]) % p
+                if target_mod_p == 0: break
+                x_mod_order = discrete_log(a_mod[i], target_mod_p, p)
+                if x_mod_order is None: break
+                congruences.append((x_mod_order % orders[i], orders[i]))
+            else:
+                residues, moduli = zip(*congruences)
+                x_base = crt(residues, moduli)
+                if x_base is not None:
+                    x_start = x_base if x_base >= 1 else x_base + modulus
+                    for x in range(x_start, x_max + 1, modulus):
+                        if pow(a, x) == residual:
+                            solutions.append((x, y))
+
+        # Update b^y -> b^(y+1)
+        if y < y_max:
+            b_pow_y *= b
+            for i in range(len(sieve_primes)):
+                b_pow_y_mod[i] = (b_pow_y_mod[i] * b_mod[i]) % sieve_primes[i]
+
+    yield from sorted(solutions)
+
+def _euclid(max_m: int | None = None) -> Iterator[tuple[int, int, int]]:
+    """
+    Generate unique primitive Pythagorean triples (a, b, c) with Euclid's formula,
+    where a <= b <= c.
+    """
+    for m in (itertools.count(start=2) if max_m is None else range(2, max_m + 1)):
+        for n in itertools.compress(range(m), _coprime_range(m)):
+            if (m + n) % 2 == 1:
+                m_squared, n_squared = m*m, n*n
+                a, b, c = m_squared - n_squared, 2*m*n, m_squared + n_squared
+                if a > b:
+                    a, b = b, a
+                yield (a, b, c)
+
+def _berggren() -> Iterator[tuple[int, int, int]]:
+    """
+    Generate primitive Pythagorean triples (a, b, c) with Berggren's tree method,
+    where a <= b <= c, and triples are generated in order of increasing c.
+    """
+    triples = [(5, 3, 4)]
+    while triples:
+        c, a, b = heappop(triples)
+        if a > b:
+            a, b = b, a
+        yield (a, b, c)
+
+        # Apply Berggren's transformations
+        heappush(triples, (2*a - 2*b + 3*c, a - 2*b + 2*c, 2*a - b + 2*c))
+        heappush(triples, (2*a + 2*b + 3*c, a + 2*b + 2*c, 2*a + b + 2*c))
+        heappush(triples, (-2*a + 2*b + 3*c, -a + 2*b + 2*c, -2*a + b + 2*c))
+
+def _solve_bqf_definite(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int]]:
     """
     Solve ax^2 + bxy + cy^2 = n when discriminant Δ = b^2 - 4ac < 0.
     """
@@ -3651,7 +3680,7 @@ def _solve_definite(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int]]
             if not remainder:
                 yield (p*x + q*Y, r*x + s*Y)
 
-def _solve_parabolic(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int]]:
+def _solve_bqf_parabolic(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int]]:
     """
     Solve ax^2 + bxy + cy^2 = n when discriminant Δ = b^2 - 4ac = 0.
     The form factors as (2ax + by)^2 = 4an.
@@ -3688,7 +3717,7 @@ def _solve_parabolic(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int]
         family_2 = bezout(2*a, b, -sqrt_N)
         yield from (family_1 if sqrt_N == 0 else alternating(family_1, family_2))
 
-def _solve_degenerate(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int]]:
+def _solve_bqf_degenerate(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int]]:
     """
     Solve ax^2 + bxy + cy^2 = n when discriminant Δ = b^2 - 4ac > 0 is a perfect square.
     """
@@ -3735,7 +3764,7 @@ def _solve_degenerate(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int
         if remainder: continue
         yield (x, y)
 
-def _solve_indefinite(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int]]:
+def _solve_bqf_indefinite(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int]]:
     """
     Solve ax^2 + bxy + cy^2 = n when discriminant Δ = b^2 - 4ac > 0
     is not a perfect square.
@@ -3772,36 +3801,42 @@ def _solve_indefinite(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int
             if not remainder:
                 yield (x, Y)
 
-def _euclid(max_m: int | None = None) -> Iterator[tuple[int, int, int]]:
+def _pillai_bound(a: int, b: int, c: int) -> int:
     """
-    Generate unique primitive Pythagorean triples (a, b, c) with Euclid's formula,
-    where a <= b <= c.
-    """
-    for m in (itertools.count(start=2) if max_m is None else range(2, max_m + 1)):
-        for n in itertools.compress(range(m), _coprime_range(m)):
-            if (m + n) % 2 == 1:
-                m_squared, n_squared = m*m, n*n
-                a, b, c = m_squared - n_squared, 2*m*n, m_squared + n_squared
-                if a > b:
-                    a, b = b, a
-                yield (a, b, c)
+    Rigorous bound on B = max(x, y) for solutions to a^x - b^y = c with x, y > 0
+    using Laurent–Mignotte–Nesterenko (1995) explicit 2-log lower bound.
 
-def _berggren() -> Iterator[tuple[int, int, int]]:
+    Note that if c == 0 there is no finite bound in general
+    (e.g. a=b gives infinitely many).
     """
-    Generate primitive Pythagorean triples (a, b, c) with Berggren's tree method,
-    where a <= b <= c, and triples are generated in order of increasing c.
-    """
-    triples = [(5, 3, 4)]
-    while triples:
-        c, a, b = heappop(triples)
-        if a > b:
-            a, b = b, a
-        yield (a, b, c)
+    if a < 2 or b < 2:
+        raise ValueError("Bases a and b must be >= 2")
+    if c == 0:
+        raise ValueError("No finite bound for c=0 in general")
 
-        # Apply Berggren's transformations
-        heappush(triples, (2*a - 2*b + 3*c, a - 2*b + 2*c, 2*a - b + 2*c))
-        heappush(triples, (2*a + 2*b + 3*c, a + 2*b + 2*c, 2*a + b + 2*c))
-        heappush(triples, (-2*a + 2*b + 3*c, -a + 2*b + 2*c, -2*a + b + 2*c))
+    la, lb = log(a), log(b)
+    m, M = (la, lb) if la <= lb else (lb, la)
+
+    # If y is small enough that b^y < 2|c|, it's already bounded by log(2|c|)/log b,
+    # and similarly for x. Using min(log a, log b) gives a uniform U covering both.
+    U = log(2 * abs(c)) / m  # abs(c) >= 1 here
+    S = (1.0 / la) + (1.0 / lb)
+
+    K = 24.34  # LMN constant (as quoted by Evertse)
+    # Start from the "21" floor in LMN (so we don't need B inside the log yet)
+    B = max(2, ceil(U + K * M * (21.0 ** 2)))
+
+    for _ in range(200):
+        # LMN uses max{ log( x/log b + y/log a ) + 0.14, 21 }.
+        # We upper bound (x/log b + y/log a) <= B*(1/log a + 1/log b) = B*S.
+        t = log(B * S) + 0.14
+        L = max(t, 21.0)
+        B_next = ceil(U + K * M * (L * L))
+        if B_next <= B:
+            return B
+        B = B_next
+
+    return B  # extremely conservative fallback
 
 
 
@@ -3995,7 +4030,7 @@ def _smith_normal_form(A: Matrix[int]) -> tuple[Matrix[int], Matrix[int], Matrix
     """
     Compute Smith normal form with unimodular transforms.
 
-    The Smith normal form S is a diagonal matrix with nonnegative entries
+    The Smith normal form S is a diagonal matrix with non-negative entries
     d_1, d_2, ..., d_r where each d_i divides d_{i+1}.
 
     Returns matrices S, and transforms U, V where the transforms satisfy U @ A @ V = S.
@@ -4566,7 +4601,7 @@ def polygonal_index(s: int, n: int) -> int:
     Returns the largest integer i such that P(s, i) <= n.
     """
     if n < 0:
-        raise ValueError("n must be a nonnegative integer")
+        raise ValueError("n must be a non-negative integer")
     if n == 0:
         return 0
     if s == 2:
@@ -4590,7 +4625,7 @@ def is_polygonal(s: int, n: int) -> bool:
     Check if n is an s-gonal number.
     """
     if n < 0:
-        raise ValueError("n must be a nonnegative integer")
+        raise ValueError("n must be a non-negative integer")
     if s < 3:
         raise ValueError("Must have s >= 3")
 
@@ -4623,6 +4658,73 @@ def alternating(*iterables: Iterable) -> Iterator:
         try: yield next(iterable)
         except StopIteration: continue
         queue.append(iterable)
+
+def periodic_continued_fraction(
+    D: int,
+    P: int = 0,
+    Q: int = 1,
+) -> tuple[Iterator[int], int, int]:
+    """
+    Compute coefficients for the periodic continued fraction
+    (P + sqrt(D)) / Q = a0 + 1 / (a1 + 1 / (a2 + ...)).
+
+    Returns
+    -------
+    coefficients : Iterator[int]
+        Coefficients of the continued fraction
+    initial_length : int
+        Length of the initial non-repeating block
+    period_length : int
+        Length of the repeating period
+    """
+    if is_square(D) or D <= 0:
+        raise ValueError("D must be a non-square positive integer.")
+
+    coefficients, index, sqrt_D = [], {}, isqrt(D)
+    a = (sqrt_D + P) // Q
+    while (P, Q, a) not in index:
+        index[P, Q, a] = len(coefficients)
+        coefficients.append(a)
+        P = a*Q - P
+        Q = (D - P*P) // Q
+        a = (sqrt_D + P) // Q
+
+    period_length = len(coefficients) - index[P, Q, a]
+    initial_length = len(coefficients) - period_length
+    coefficients = itertools.chain(
+        coefficients[:initial_length],
+        itertools.cycle(coefficients[initial_length:])
+    )
+
+    return coefficients, initial_length, period_length
+
+def convergents(
+    coefficients: Iterable[int],
+    num: int | None = None,
+) -> Iterator[tuple[int, int]]:
+    """
+    Return convergents of the continued fraction with the given coefficients.
+
+    Parameters
+    ----------
+    coefficients : Iterable[int]
+        Coefficients of the continued fraction
+    num : int
+        Maximum number of convergents to generate (infinite by default)
+
+    Yields
+    ------
+    numerator : int
+        Numerator of the convergent
+    denominator : int
+        Denominator of the convergent
+    """
+    A, A_prev = 1, 0
+    B, B_prev = 0, 1
+    for a in itertools.islice(coefficients, num):
+        A, A_prev = a * A + A_prev, A
+        B, B_prev = a * B + B_prev, B
+        yield A, B
 
 def group_by_key(
     iterable: Iterable,
@@ -4848,24 +4950,11 @@ def squares(low: int = 0, high: int | None = None) -> Iterator[int]:
         n += 2*i + 1
         i += 1
 
-def cubes(low: int = 0, high: int | None = None) -> Iterator[int]:
-    """
-    Generate cube numbers in the range [low, high].
-    """
-    high = inf if high is None else high
-    i = iroot(low, 3)
-    while (n := i*i*i) < low:
-        i += 1
-    while n <= high:
-        yield n
-        n += 3*i*i + 3*i + 1
-        i += 1
-
 def perfect_power(n: int) -> tuple[int, int]:
     """
     Find integers a, b such that a^b = n.
 
-    Returns a solution (a, b) with b > 1 if there are any such solutions,
+    Returns the solution (a, b) with minimal b > 1 if there are any such solutions,
     otherwise returns the trivial solution (n, 1).
 
     Parameters
@@ -4878,8 +4967,7 @@ def perfect_power(n: int) -> tuple[int, int]:
     if n == -1:
         return (-1, 3)
 
-    is_negative = n < 0
-    n = -n if is_negative else n
+    n = -n if (is_negative := n < 0) else n
     for p in primes(high=n.bit_length()):
         r = iroot(n, p)
         if pow(r, p) == n:
@@ -5018,12 +5106,6 @@ def _threshold_select(
         if value <= max_val:
             return result
     return default
-
-
-
-########################################################################
-############################## Constants ###############################
-########################################################################
 
 @singleton
 def _int_str_mod() -> int:
