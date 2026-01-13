@@ -41,7 +41,7 @@ __all__ = [
     'aliquot_sum_range', 'radical', 'radical_range', 'mobius', 'mobius_range',
     'totient', 'totient_range', 'carmichael',
     # Modular Arithmetic
-    'egcd', 'crt', 'multiplicative_order', 'primitive_root',
+    'egcd', 'crt', 'coprimes', 'multiplicative_order', 'primitive_root',
     'legendre', 'jacobi', 'kronecker', 'dirichlet_character',
     # Nonlinear Congruences
     'hensel', 'discrete_log', 'modular_roots',
@@ -2147,19 +2147,6 @@ def _prime_factor_range(N: int) -> list[int]:
 
     return prime_divisor
 
-def _coprime_range(N: int) -> bytearray:
-    """
-    Return whether each integer from 0, 1, 2, ... N - 1 is coprime to N.
-    """
-    if N < 1:
-        return bytearray()
-    is_coprime = bytearray(b'\x01') * N
-    is_coprime[0] = (N == 1)
-    for p in set(_gen_prime_factors(N)):
-        is_coprime[p::p] = b'\x00' * ((N - 1) // p)
-
-    return is_coprime
-
 
 
 ########################################################################
@@ -2226,6 +2213,37 @@ def crt(residues: Iterable[int], moduli: Iterable[int]) -> int | None:
         return reduce(_crt_two_congruences, zip(residues, moduli), (0, 1))[0]
     except _NoSolutionError:
         return None
+
+def coprimes(n: int) -> Iterator[int]:
+    """
+    Generate all integers k in the range [0, n) that are coprime to n.
+
+    Returns the reduced residue system modulo n, i.e., the unit group (Z/nZ)×.
+    The size of this set is φ(n) (Euler's totient function).
+
+    For small n, uses an O(n) space sieve for speed. For large n, uses an
+    O(1) space generator that checks gcd(k, n) = 1 for each k.
+
+    Parameters
+    ----------
+    n : int
+        Positive integer modulus
+
+    Complexity
+    ----------
+    O(n * ω(n)) time and O(n) space for n <= 10⁷ (sieve approach).
+    O(φ(n) * log n) time and O(1) space for n > 10⁷ (gcd approach).
+    """
+    if n < 1:
+        raise ValueError("n must be a positive integer")
+    if n == 1:
+        yield 0
+        return
+
+    if n < 10_000_000:
+        yield from itertools.compress(range(n), _coprime_range(n))
+    else:
+        yield from (i for i in range(n) if gcd(i, n) == 1)
 
 def multiplicative_order(a: int, mod: int) -> int:
     """
@@ -2444,6 +2462,19 @@ def _crt_two_congruences(
     x = a1 + n1 * ((k * inv) % n2_)
     mod = n1 * n2_  # n1 * n2 // d
     return x % mod, mod
+
+def _coprime_range(N: int) -> bytearray:
+    """
+    Return whether each integer from 0, 1, 2, ... N - 1 is coprime to N.
+    """
+    if N < 1:
+        return bytearray()
+    is_coprime = bytearray(b'\x01') * N
+    is_coprime[0] = (N == 1)
+    for p in set(_gen_prime_factors(N)):
+        is_coprime[p::p] = b'\x00' * ((N - 1) // p)
+
+    return is_coprime
 
 def _bach(p: int) -> int:
     """
@@ -3780,7 +3811,7 @@ def _euclid(max_m: int | None = None) -> Iterator[tuple[int, int, int]]:
     where a <= b <= c.
     """
     for m in (itertools.count(start=2) if max_m is None else range(2, max_m + 1)):
-        for n in itertools.compress(range(m), _coprime_range(m)):
+        for n in coprimes(m):
             if (m + n) % 2 == 1:
                 m_squared, n_squared = m*m, n*n
                 a, b, c = m_squared - n_squared, 2*m*n, m_squared + n_squared
