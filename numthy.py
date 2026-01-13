@@ -4944,12 +4944,14 @@ def perfect_power(n: int) -> tuple[int, int]:
         return (-1, 3)
 
     n = -n if (is_negative := n < 0) else n
-    for p in primes(high=n.bit_length()):
+    if not is_negative and (r := isqrt(n)) ** 2 == n:
+        return (r, 2)
+    for p in primes(low=3, high=n.bit_length()):
         r = iroot(n, p)
         if pow(r, p) == n:
             return ((-r if is_negative else r), p)
 
-    return (n, 1)
+    return (-n if is_negative else n, 1)
 
 def binary_search(
     f: Callable[[int], int],
