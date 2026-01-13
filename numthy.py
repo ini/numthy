@@ -92,8 +92,8 @@ def is_prime(n: int) -> bool:
 
     Uses a combination of trial division, the Miller-Rabin primality test
     with deterministic bases, or the extra-strong variant of the Baillie-PSW
-    primality test (this variant has no known pseudoprimes, and has been
-    computationally verified to have no counterexamples for all n < 2^64).
+    primality test (this variant has no known pseudoprimes in any range, and
+    has been computationally verified to have no counterexamples for all n < 2^64).
 
     See: https://miller-rabin.appspot.com/ (deterministic Miller-Rabin base sets)
     See: https://ntheory.org/pseudoprimes.html (BPSW verification up to 2^64)
@@ -949,7 +949,7 @@ def _gen_prime_factors(n: int) -> Iterator[int]:
     and a self-initializing quadratic sieve (SIQS).
     """
     if n == 0:
-        return ValueError("Must have n != 0")
+        raise ValueError("Must have n != 0")
 
     # Factor out powers of two
     n = -n if n < 0 else n
@@ -2600,7 +2600,7 @@ def hensel(
     Parameters
     ----------
     coefficients : Sequence[int]
-        Polynomial coefficients, where coefficients[i] is the coefficient for x^i
+        Polynomial coefficients, where coefficients[i] = a_i is the coefficient for x^i
     p : int
         Prime base of modulus
     k : int
@@ -4676,8 +4676,10 @@ def is_polygonal(s: int, n: int) -> bool:
     """
     if n < 0:
         raise ValueError("n must be a non-negative integer")
-    if s < 3:
-        raise ValueError("Must have s >= 3")
+    if s < 2:
+        raise ValueError("Must have s >= 2")
+    if s == 2:
+        return True
 
     D = 8 * n * (s - 2) + (s - 4) * (s - 4)
     sqrt_D = isqrt(D)
