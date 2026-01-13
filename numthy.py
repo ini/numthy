@@ -2236,10 +2236,6 @@ def coprimes(n: int) -> Iterator[int]:
     """
     if n < 1:
         raise ValueError("n must be a positive integer")
-    if n == 1:
-        yield 0
-        return
-
     if n < 10_000_000:
         yield from itertools.compress(range(n), _coprime_range(n))
     else:
@@ -2448,9 +2444,8 @@ def _crt_two_congruences(
     """
     a1, n1 = congruence_1
     a2, n2 = congruence_2
-    d = gcd(n1, n2)
     diff = a2 - a1
-    if diff % d != 0:
+    if diff % (d := gcd(n1, n2)) != 0:
         raise _NoSolutionError("No solution exists for the given pair of congruences.")
 
     # Reduce to coprime moduli and compute modular inverse
