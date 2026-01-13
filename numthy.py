@@ -37,9 +37,9 @@ __all__ = [
     # Factorization
     'prime_factors', 'prime_factorization', 'divisors',
     # Arithmetic Functions
-    'mobius', 'mobius_range', 'radical', 'radical_range',
     'divisor_function', 'divisor_count_range', 'divisor_function_range',
-    'aliquot_sum_range', 'totient', 'totient_range', 'carmichael',
+    'aliquot_sum_range', 'radical', 'radical_range', 'mobius', 'mobius_range',
+    'totient', 'totient_range', 'carmichael',
     # Modular Arithmetic
     'egcd', 'crt', 'multiplicative_order', 'primitive_root',
     'legendre', 'jacobi', 'kronecker', 'dirichlet_character',
@@ -95,7 +95,7 @@ def is_prime(n: int) -> bool:
     primality test (this variant has no known pseudoprimes in any range, and
     has been computationally verified to have no counterexamples for all n < 2^64).
 
-    See: https://miller-rabin.appspot.com/ (deterministic Miller-Rabin base sets)
+    See: https://miller-rabin.appspot.com (deterministic Miller-Rabin base sets)
     See: https://ntheory.org/pseudoprimes.html (BPSW verification up to 2^64)
 
     Parameters
@@ -1873,105 +1873,6 @@ def _nullspace_gf2(rows: list[int]) -> list[int]:
 ######################### Arithmetic Functions #########################
 ########################################################################
 
-def mobius(n: int) -> int:
-    """
-    Compute the Mobius function μ(n) for a positive integer n.
-
-    Parameters
-    ----------
-    n: int
-        Positive integer function argument
-    """
-    if n < 1:
-        raise ValueError("n must be a positive integer.")
-    if n == 1:
-        return 1
-    if is_prime(n):
-        return -1
-
-    # Trial division with small primes - check for squared factors immediately
-    num_factors = 0
-    for p in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53):
-        if n % p == 0:
-            num_factors += 1
-            n //= p
-            if n % p == 0:  # squared factor
-                return 0
-
-    if n == 1:
-        return 1 if num_factors % 2 == 0 else -1
-
-    # Fast perfect square check
-    sqrt_n = isqrt(n)
-    if sqrt_n * sqrt_n == n:
-        return 0
-
-    # Factor remaining
-    num_remaining_factors = _count_distinct_prime_factors(n)
-    if num_remaining_factors is None:
-        return 0
-
-    num_factors += num_remaining_factors
-    return 1 if num_factors % 2 == 0 else -1
-
-def mobius_range(N: int) -> list[int]:
-    """
-    Find the value of the Mobius function μ(n) for each n = 0, 1, 2, ..., N - 1.
-    Includes dummy value μ(0) = 1.
-
-    Parameters
-    ----------
-    N : int
-        Upper bound on range (exclusive)
-    """
-    mu = [1] * N
-    prime_divisor = _prime_factor_range(N)
-    for n in range(2, N):
-        p = prime_divisor[n]
-        m = n // p
-        if prime_divisor[m] == p:
-            mu[n] = 0
-        else:
-            mu[n] = -mu[m]
-
-    return mu
-
-def radical(n: int) -> int:
-    """
-    Compute rad(n) as the product of the distinct prime factors of n.
-
-    Parameters
-    ----------
-    n: int
-        Positive integer function argument
-    """
-    if n < 1:
-        raise ValueError("n must be a positive integer.")
-    return prod(set(_gen_prime_factors(n)))
-
-def radical_range(N: int) -> list[int]:
-    """
-    Find the value of the radical function rad(n) for each n = 0, 1, 2, ..., N - 1,
-    where rad(n) is the product of the distinct prime factors of n.
-    Includes dummy value rad(0) = 1.
-
-    Parameters
-    ----------
-    N : int
-        Upper bound on range (exclusive)
-    """
-    rad = [1] * N
-    prime_divisor = _prime_factor_range(N)
-    for n in range(2, N):
-        p = prime_divisor[n]
-        m = n // p
-        if prime_divisor[m] == p:
-            rad[n] = rad[m]
-        else:
-            rad[n] = rad[m] * p
-
-    return rad
-
 def divisor_function(n: int, k: int = 1) -> int:
     """
     Compute the value of the divisor function σ_k(n),
@@ -2089,6 +1990,105 @@ def totient(n: int) -> int:
         phi -= phi // p
 
     return phi
+
+def radical(n: int) -> int:
+    """
+    Compute rad(n) as the product of the distinct prime factors of n.
+
+    Parameters
+    ----------
+    n: int
+        Positive integer function argument
+    """
+    if n < 1:
+        raise ValueError("n must be a positive integer.")
+    return prod(set(_gen_prime_factors(n)))
+
+def radical_range(N: int) -> list[int]:
+    """
+    Find the value of the radical function rad(n) for each n = 0, 1, 2, ..., N - 1,
+    where rad(n) is the product of the distinct prime factors of n.
+    Includes dummy value rad(0) = 1.
+
+    Parameters
+    ----------
+    N : int
+        Upper bound on range (exclusive)
+    """
+    rad = [1] * N
+    prime_divisor = _prime_factor_range(N)
+    for n in range(2, N):
+        p = prime_divisor[n]
+        m = n // p
+        if prime_divisor[m] == p:
+            rad[n] = rad[m]
+        else:
+            rad[n] = rad[m] * p
+
+    return rad
+
+def mobius(n: int) -> int:
+    """
+    Compute the Mobius function μ(n) for a positive integer n.
+
+    Parameters
+    ----------
+    n: int
+        Positive integer function argument
+    """
+    if n < 1:
+        raise ValueError("n must be a positive integer.")
+    if n == 1:
+        return 1
+    if is_prime(n):
+        return -1
+
+    # Trial division with small primes - check for squared factors immediately
+    num_factors = 0
+    for p in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53):
+        if n % p == 0:
+            num_factors += 1
+            n //= p
+            if n % p == 0:  # squared factor
+                return 0
+
+    if n == 1:
+        return 1 if num_factors % 2 == 0 else -1
+
+    # Fast perfect square check
+    sqrt_n = isqrt(n)
+    if sqrt_n * sqrt_n == n:
+        return 0
+
+    # Factor remaining
+    num_remaining_factors = _count_distinct_prime_factors(n)
+    if num_remaining_factors is None:
+        return 0
+
+    num_factors += num_remaining_factors
+    return 1 if num_factors % 2 == 0 else -1
+
+def mobius_range(N: int) -> list[int]:
+    """
+    Find the value of the Mobius function μ(n) for each n = 0, 1, 2, ..., N - 1.
+    Includes dummy value μ(0) = 1.
+
+    Parameters
+    ----------
+    N : int
+        Upper bound on range (exclusive)
+    """
+    mu = [1] * N
+    prime_divisor = _prime_factor_range(N)
+    for n in range(2, N):
+        p = prime_divisor[n]
+        m = n // p
+        if prime_divisor[m] == p:
+            mu[n] = 0
+        else:
+            mu[n] = -mu[m]
+
+    return mu
 
 def totient_range(N: int) -> list[int]:
     """

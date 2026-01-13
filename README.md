@@ -1,0 +1,103 @@
+# NumThy
+
+Computational number theory. Pure Python. Zero dependencies. Unreasonably fast.
+
+## Installation
+
+```bash
+pip install numthy
+```
+
+Or copy [`numthy.py`](./numthy.py) directly into your project.
+
+## Quick Start
+
+```python
+import numthy as nt
+
+# Primality testing
+nt.is_prime(2**89 - 1)  # True (Mersenne prime)
+
+# Factorization
+nt.prime_factors(2**64 + 1)  # (274177, 67280421310721)
+
+# Modular arithmetic
+nt.discrete_log(3, 1000, 2**16 + 1)  # 36185
+
+# Diophantine equations
+solutions = nt.pell(2)
+next(solutions)  # (3, 2) since 3² - 2·2² = 1
+```
+
+## Highlights
+
+The same algorithms used by Mathematica, SageMath, and research-grade CAS systems — implemented from scratch in pure Python.
+
+- **Primality** — Miller-Rabin, Baillie-PSW, Lucas-Lehmer
+- **Factorization** — Brent's variant of Pollard's rho, Lenstra's ECM (Elliptic Curve Method), Self-Initializing Quadratic Sieve with up to 3 large primes
+- **Prime counting** — Lagarias-Miller-Odlyzko combinatorial method
+- **Discrete log** — Pohlig-Hellman, Baby-step giant-step, Pollard rho
+- **Modular roots** — Tonelli-Shanks, Adleman-Manders-Miller for arbitary k-th roots, Hensel lifting with both simple and multiple roots
+- **Diophantine** — Cornacchia, Pell solver, binary quadratic forms, Pillai's equation
+- **Lattices** — LLL reduction, Babai's nearest plane, Smith normal form
+
+## Documentation
+
+See [API.md](API.md) for the full API reference.
+
+## Natural Language CLI
+
+Ask number theory questions in plain English:
+
+```bash
+pip install numthy[cli]
+export ANTHROPIC_API_KEY=your-key
+
+numthy "Is 2^89 - 1 prime?"
+# True
+
+numthy "Factor 2^64 + 1"
+# (274177, 67280421310721)
+
+numthy "Find the first 10 Fibonacci primes"
+```
+
+Or use expressions directly (no API key needed):
+
+```bash
+numthy "prime_factors(2**64 + 1)"
+numthy "is_prime(2**89 - 1)"
+```
+
+## MCP Server (for Claude)
+
+numthy includes an MCP server that lets Claude use number theory functions directly.
+
+```bash
+pip install numthy[mcp]
+```
+
+Add to your Claude config (`~/.claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "numthy": {
+      "command": "python",
+      "args": ["-m", "mcp_server"]
+    }
+  }
+}
+```
+
+Then ask Claude things like "Is 2^89 - 1 prime?" or "Factor 2^64 + 1".
+
+## Requirements
+
+Python 3.10+
+
+No external dependencies.
+
+## License
+
+Free to use, copy, modify, and redistribute with attribution. [MIT](LICENSE.txt)
