@@ -1,4 +1,6 @@
-# NumThy
+<h1 align="center" style="margin-top: 24px;">
+  <img src="https://i.imgur.com/IjaDdYO.png" alt="NumThy" width="256">
+</h1>
 
 Computational number theory. Pure Python. Zero dependencies. Unreasonably fast.
 
@@ -8,7 +10,7 @@ Computational number theory. Pure Python. Zero dependencies. Unreasonably fast.
 pip install numthy
 ```
 
-Or copy [`numthy.py`](./numthy.py) directly into your project.
+Or save [`numthy.py`](https://raw.githubusercontent.com/ini/numthy/main/numthy.py) directly into your project.
 
 ## Quick Start
 
@@ -22,7 +24,7 @@ nt.is_prime(2**89 - 1)  # True (Mersenne prime)
 nt.prime_factors(2**64 + 1)  # (274177, 67280421310721)
 
 # Modular arithmetic
-nt.discrete_log(3, 1000, 2**16 + 1)  # 36185
+nt.discrete_log(3, 1000, 2**16 + 1)  # 50921
 
 # Diophantine equations
 solutions = nt.pell(2)
@@ -96,8 +98,8 @@ Then ask Claude things like "Is 2^89 - 1 prime?" or "Factor 2^64 + 1".
 
 Python 3.10+
 
-No external dependencies.
+That's it.
 
 ## License
 
-Free to use, copy, modify, and redistribute with attribution. [MIT](LICENSE.txt)
+[Free to use, copy, modify, and redistribute with attribution.](LICENSE.txt)

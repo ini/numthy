@@ -46,8 +46,7 @@ __all__ = [
     # Nonlinear Congruences
     'hensel', 'discrete_log', 'modular_roots',
     # Diophantine Equations
-    'bezout', 'cornacchia', 'pell', 'binary_quadratic_solve', 
-    'pythagorean_triples', 'pillai',
+    'bezout', 'cornacchia', 'pell', 'conic', 'pythagorean_triples', 'pillai',
     # Lattice Methods
     'integer_solve', 'integer_nullspace', 'lll_reduce', 'babai_closest_vector',
     # Combinatorics
@@ -74,11 +73,14 @@ large_cache = lru_cache(maxsize=1048576)
 
 def clear_cache():
     """
-    Clear all caches in this module.
+    Clear all caches defined in this module.
     """
-    for obj in vars(sys.modules[__name__]).values():
-        if callable(obj) and hasattr(obj, 'cache_clear'):
-            obj.cache_clear()
+    module = sys.modules[__name__]
+    for obj in vars(module).values():
+        if getattr(obj, '__module__', None) == __name__:
+            cache_clear = getattr(obj, 'cache_clear', None)
+            if callable(cache_clear):
+                cache_clear()
 
 
 
@@ -126,7 +128,7 @@ def is_prime(n: int) -> bool:
     elif n < 55245642489451:
         bases = (2, 141889084524735, 1199124725622454117, 11096072698276303650)
     else:
-        return _baillie_psw(n) # BPSW has no known pseudoprimes < 2^64
+        return _baillie_psw(n)  # BPSW has zero known pseudoprimes
 
     return _miller_rabin(n, bases)
 
@@ -785,7 +787,7 @@ def _fenwick_tree_update(tree: list[Number], index: int, value: Number, tree_siz
         tree[i] += value
 
 @small_cache
-def _fenwick_tree_edges(tree_size: int) -> tuple[tuple[int, int]]:
+def _fenwick_tree_edges(tree_size: int) -> tuple[tuple[int, int], ...]:
     """
     Get all (index, parent_index) pairs for a Binary Indexed Tree (Fenwick Tree).
     """
@@ -1005,31 +1007,6 @@ def _gen_prime_factors(n: int) -> Iterator[int]:
                     break
                 else:
                     B = int((B or 30000) * 1.25)  # increase size of factor base
-
-def _count_distinct_prime_factors(n: int) -> int | None:
-    """
-    Count distinct prime factors of n.
-    Returns None if n has a squared prime factor.
-    """
-    if n == 1:
-        return 0
-    if is_prime(n):
-        return 1
-
-    # Use iterative factorization
-    stack, seen_prime_factors = deque([n]), set()
-    while stack:
-        n = stack.popleft()
-        if is_prime(n):
-            if n in seen_prime_factors:
-                return None  # found squared factor
-            else:
-                seen_prime_factors.add(n)
-        elif n > 1:
-            d = _brent(n)
-            stack.extend([d, n // d])
-
-    return len(seen_prime_factors)
 
 def _partial_factorization(
     n: int,
@@ -1973,24 +1950,6 @@ def aliquot_sum_range(N: int) -> list[int]:
     divisor_sums = divisor_function_range(N)
     return [d - i for i, d in enumerate(divisor_sums)]
 
-def totient(n: int) -> int:
-    """
-    Compute Euler's totient function φ(n) for a positive integer n.
-
-    Parameters
-    ----------
-    n: int
-        Positive integer function argument
-    """
-    if n < 1:
-        raise ValueError("n must be a positive integer.")
-
-    phi = n
-    for p in set(_gen_prime_factors(n)):
-        phi -= phi // p
-
-    return phi
-
 def radical(n: int) -> int:
     """
     Compute rad(n) as the product of the distinct prime factors of n.
@@ -2040,33 +1999,20 @@ def mobius(n: int) -> int:
         raise ValueError("n must be a positive integer.")
     if n == 1:
         return 1
+    if is_square(n):
+        return 0
     if is_prime(n):
         return -1
 
-    # Trial division with small primes - check for squared factors immediately
-    num_factors = 0
-    for p in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53):
-        if n % p == 0:
-            num_factors += 1
-            n //= p
-            if n % p == 0:  # squared factor
-                return 0
+    mu, seen = 1, set()
+    for p in _gen_prime_factors(n):
+        if p in seen:
+            return 0
+        else:
+            seen.add(p)
+            mu = -mu
 
-    if n == 1:
-        return 1 if num_factors % 2 == 0 else -1
-
-    # Fast perfect square check
-    sqrt_n = isqrt(n)
-    if sqrt_n * sqrt_n == n:
-        return 0
-
-    # Factor remaining
-    num_remaining_factors = _count_distinct_prime_factors(n)
-    if num_remaining_factors is None:
-        return 0
-
-    num_factors += num_remaining_factors
-    return 1 if num_factors % 2 == 0 else -1
+    return mu
 
 def mobius_range(N: int) -> list[int]:
     """
@@ -2089,6 +2035,24 @@ def mobius_range(N: int) -> list[int]:
             mu[n] = -mu[m]
 
     return mu
+
+def totient(n: int) -> int:
+    """
+    Compute Euler's totient function φ(n) for a positive integer n.
+
+    Parameters
+    ----------
+    n: int
+        Positive integer function argument
+    """
+    if n < 1:
+        raise ValueError("n must be a positive integer.")
+
+    phi = n
+    for p in set(_gen_prime_factors(n)):
+        phi -= phi // p
+
+    return phi
 
 def totient_range(N: int) -> list[int]:
     """
@@ -2138,7 +2102,7 @@ def carmichael(n: int) -> int:
 def _prime_factor_range(N: int) -> list[int]:
     """
     Find a prime factor for each n = 0, 1, 2, ..., N - 1.
-    Returns any prime factor for each n (not necessarily the smallest).
+    For composite n, stores the largest prime factor < √N.
     """
     prime_divisor = list(range(N))
     if N >= 1:
@@ -2565,8 +2529,8 @@ def _dirichlet_character_prime_power(p: int, e: int, k: int) -> Callable[[int], 
         # Find smallest primitive root g mod p^2 (i.e. the Conrey generator)
         # We have g < 2p, and g will be a primitive root mod p^e for all e > 0
         p2, phi = p * p, p * (p - 1)
-        primes = set(_gen_prime_factors(phi))
-        is_primitive_root = lambda g: all(pow(g, phi // r, p2) != 1 for r in primes)
+        prime_set = set(_gen_prime_factors(phi))
+        is_primitive_root = lambda g: all(pow(g, phi // r, p2) != 1 for r in prime_set)
         g = next(i for i in range(2, 2*p) if is_primitive_root(i))
 
         # Exact values for 1st, 2nd, and 4th roots of unity
@@ -3257,7 +3221,7 @@ def bezout(a: int, b: int, c: int) -> Iterator[tuple[int, int]]:
 
 def cornacchia(d: int, m: int) -> Iterator[tuple[int, int]]:
     """
-    Generate positive integer solutions to the equation x^2 + dy^2 = m
+    Generate all unique positive integer solutions to the equation x^2 + dy^2 = m
     where 0 < d < m and gcd(d, m) = 1.
 
     Parameters
@@ -3332,8 +3296,8 @@ def cornacchia(d: int, m: int) -> Iterator[tuple[int, int]]:
 
 def pell(D: int, N: int = 1) -> Iterator[tuple[int, int]]:
     """
-    Generate positive integer solutions to the generalized Pell equation x^2 - Dy^2 = N
-    where D is not a perfect square.
+    Generate all unique positive integer solutions to the generalized Pell equation
+    x^2 - Dy^2 = N, where D is not a perfect square.
 
     Yields infinite positive integer solutions x, y > 0 in order of increasing x.
     Uses the Lagrange-Matthews-Mollin (LMM) algorithm.
@@ -3390,27 +3354,40 @@ def pell(D: int, N: int = 1) -> Iterator[tuple[int, int]]:
             z = z if z <= m // 2 else z - m
             a, initial, period = periodic_continued_fraction(D, P=z, Q=m)
             a = [next(a) for _ in range(initial + period)]
-            i = next((i for i in range(1, len(a)) if abs(a[i]) > sqrt_D), None)
-            if i is not None:
-                A, B = zip(*list(convergents(a[:-1])))
-                x, y = f*(m*A[i-1] - z*B[i-1]), f*B[i-1]
-                if x*x - D*y*y == N:
-                    fundamental_solutions.append((x, y))
-                elif x*x - D*y*y == -N and (t, u) != (None, None):
+            if len(a) < 2: continue
+            A, B = zip(*convergents(a[:-1]))
+            target = N // (f * f)
+            for i in range(1, len(a)):
+                if abs(a[i]) <= sqrt_D:
+                    continue
+                r, s = m*A[i-1] - z*B[i-1], B[i-1]
+                value = r*r - D*s*s
+                if value == target:
+                    fundamental_solutions.append((f*r, f*s))
+                elif value == -target and (t, u) != (None, None):
+                    x, y = f*r, f*s
                     fundamental_solutions.append(((x*t + y*u*D), (x*u + y*t)))
 
     # Find minimal solution to x^2 - Dy^2 = 1
     t0, u0 = next((x, y) for x, y in pell_convergents if x*x - D*y*y == 1)
 
     # Find minimal positive solutions to x^2 - Dy^2 = N
-    minimal_positive_solutions = []
+    minimal_positive_solutions = set()
     for x, y in fundamental_solutions:
         if x > 0 and y > 0:
-            minimal_positive_solutions.append((x, y))
+            px, py = x, y
         elif x < 0 and y < 0:
-            minimal_positive_solutions.append((-x, -y))
+            px, py = -x, -y
         else:
-            minimal_positive_solutions.append((-x*t0 + -y*u0*D, -x*u0 + -y*t0))
+            px, py = (-x*t0 + -y*u0*D, -x*u0 + -y*t0)
+        # Reduce within the Pell class to the minimal positive solution.
+        while True:
+            x_next = px*t0 - D*py*u0
+            y_next = py*t0 - px*u0
+            if x_next <= 0 or y_next <= 0:
+                break
+            px, py = x_next, y_next
+        minimal_positive_solutions.add((px, py))
 
     # Yield minimal positive solutions to x^2 - Dy^2 = N
     minimal_positive_solutions = sorted(minimal_positive_solutions)
@@ -3426,18 +3403,17 @@ def pell(D: int, N: int = 1) -> Iterator[tuple[int, int]]:
 
         t, u = t0*t + D*u0*u, t0*u + u0*t
 
-def binary_quadratic_solve(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int]]:
+def conic(a: int, b: int, c: int, d: int, e: int, f: int) -> Iterator[tuple[int, int]]:
     """
-    Generate all integer solutions (x, y) to the binary quadratic equation
-    ax^2 + bxy + cy^2 = n.
+    Generate all unique integer solutions (x, y) to the binary quadratic Diophantine
+    conic equation ax^2 + bxy + cy^2 + dx + ey + f = 0.
 
-    Uses the theory of binary quadratic forms to find solutions based on the
-    discriminant Δ = b^2 - 4ac:
+    Uses the theory of binary quadratic forms, classifying by discriminant Δ = b² - 4ac:
 
-        Δ < 0: definite form, finite solutions (via Cornacchia)
-        Δ = 0: parabolic form, reduces to linear (via Bezout's identity)
-        Δ > 0, square: degenerate form, factors into linear forms
-        Δ > 0, non-square: indefinite form, infinite solutions (via Pell equation)
+        Δ < 0 (ellipse): Lagrange reduction, finite solutions
+        Δ = 0 (parabola): parametric families via modular square roots
+        Δ > 0 (hyperbola): reduction to Pell equation, infinite solutions
+        Degenerate cases: factorization into linear forms
 
     Parameters
     ----------
@@ -3447,8 +3423,12 @@ def binary_quadratic_solve(a: int, b: int, c: int, n: int) -> Iterator[tuple[int
         Coefficient of xy term
     c : int
         Coefficient of y^2 term
-    n : int
-        Target value
+    d : int
+        Coefficient of x term
+    e : int
+        Coefficient of y term
+    f : int
+        Constant term
 
     Yields
     ------
@@ -3456,33 +3436,31 @@ def binary_quadratic_solve(a: int, b: int, c: int, n: int) -> Iterator[tuple[int
         X-coordinate of solution
     y : int
         Y-coordinate of solution
-
-    Complexity
-    ----------
-    For definite forms: O(τ(n)*f(n)) where τ, f are divisor count and factorization cost
-    For indefinite forms: O(1) per solution after initial setup
     """
     # Handle trivial form
-    if a == b == c == 0:
-        if n == 0: yield from integer_pairs()
+    if a == b == c == d == e == 0:
+        yield from (integer_pairs() if f == 0 else ())
         return
-
+    
     # Remove common factor from coefficients
-    if (g := gcd(a, b, c)) > 1:
-        if n % g != 0: return
-        yield from binary_quadratic_solve(a // g, b // g, c // g, n // g)
+    if (g := gcd(a, b, c, d, e, f)) > 1:
+        a, b, c, d, e, f = a // g, b // g, c // g, d // g, e // g, f // g
+
+    # Handle linear in x (missing x^2 term)
+    if a == 0:
+        yield from _conic_linear_in_x(b, c, d, e, f)
         return
 
-    # Dispatch based on discriminant Δ = b^2 - 4ac
     discriminant = b*b - 4*a*c
-    if discriminant < 0:
-        yield from _solve_bqf_definite(a, b, c, n)
+    scaled_determinant = -f*discriminant + b*d*e - c*d*d - a*e*e
+    if scaled_determinant == 0:
+        yield from _degenerate_conic(a, b, c, d, e, f)
+    elif discriminant > 0:
+        yield from _hyperbola(a, b, c, d, e, f)
     elif discriminant == 0:
-        yield from _solve_bqf_parabolic(a, b, c, n)
-    elif is_square(discriminant):
-        yield from _solve_bqf_degenerate(a, b, c, n)
-    else:
-        yield from _solve_bqf_indefinite(a, b, c, n)
+        yield from _parabola(a, b, c, d, e, f)
+    elif discriminant < 0:
+        yield from _ellipse(a, b, c, d, e, f)
 
 def pythagorean_triples(
     max_c: float | None = None,
@@ -3547,8 +3525,8 @@ def pythagorean_triples(
 
 def pillai(a: int, b: int, c: int) -> Iterator[tuple[int, int]]:
     """
-    Generate all positive integer solutions (x, y) to the Pillai equation a^x - b^y = c,
-    where a, b >= 2 and x, y > 0.
+    Generate all positive integer solutions (x, y) to the exponential Diophantine
+    Pillai equation a^x - b^y = c, where a, b >= 2 and x, y > 0.
 
     Parameters
     ----------
@@ -3592,7 +3570,7 @@ def pillai(a: int, b: int, c: int) -> Iterator[tuple[int, int]]:
 
     # Use a discrete log sieve to restrict the search space
     # For each p where gcd(p, ab) = 1, we need a^x = (c + b^y) (mod p)
-    # We can take discrete log for each as x = dlog_a(c + b^y) (mod ord_p(a))
+    # We can take the discrete log for each as x = dlog_a(c + b^y) (mod ord_p(a))
     # and combine these constraints via the Chinese Remainder Theorem
     a_mod = [a % p for p in sieve_primes]
     b_mod = [b % p for p in sieve_primes]
@@ -3626,179 +3604,267 @@ def pillai(a: int, b: int, c: int) -> Iterator[tuple[int, int]]:
 
     yield from sorted(solutions)
 
-def _solve_bqf_definite(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int]]:
+def _parabola(*coefficients: int) -> Iterator[tuple[int, int]]:
     """
-    Solve ax^2 + bxy + cy^2 = n when discriminant Δ = b^2 - 4ac < 0.
+    Solve ax^2 + bxy + cy^2 + dx + ey + f = 0 when discriminant Δ = b^2 - 4ac = 0.
+
+    Complexity
+    ----------
+    O(|A|) preprocessing where A = 2bd - 4ae for modular square roots, O(1) per solution
     """
-    if n == 0:
-        yield (0, 0)
-        return
-    if (a > 0) != (n > 0):
-        return
+    a, b, c, d, e, f = coefficients
+
+    # Reduce to a quadratic in x as ax^2 + (by + d)x + (cy^2 + ey + f) = 0
+    # The discriminant in x becomes (by + d)^2 - 4a(cy^2 + ey + f) = Ay + B
+    # When Δ = 0, this becomes Ay + B where A = 2bd - 4ae and B = d^2 - 4af
+    # For integer x = (-(by + d) ± z) / 2a, we need Ay + B = z^2 as a perfect square
+    A, B = 2*b*d - 4*a*e, d*d - 4*a*f
+    if A == 0 and is_square(B):
+        r = isqrt(B)
+        family_1 = bezout(2*a, b, r - d)
+        family_2 = () if r == 0 else bezout(2*a, b, -r - d)
+        yield from alternating(family_1, family_2)
+    elif A != 0:
+        # Parameterize solutions by z = z0 (mod |A|) with (z0)^2 = B (mod |A|),
+        # then recover y and x
+        def family(z0: int) -> Iterator:
+            for _, z in bezout(A, 1, z0):
+                y = (z*z - B) // A
+                x, remainder = divmod(z - d - b*y, 2*a)
+                if remainder == 0:
+                    yield (x, y)
+
+        # We have a family of solutions for each residue z such that z^2 = B (mod |A|)
+        residues = sorted(modular_roots(B, 2, abs(A)))
+        yield from alternating(*(family(r) for r in residues))
+
+def _ellipse(*coefficients: int) -> Iterator[tuple[int, int]]:
+    """
+    Solve ax^2 + bxy + cy^2 + dx + ey + f = 0 when discriminant Δ = b^2 - 4ac < 0.
+
+    Complexity
+    ----------
+    O(log² max(|a|,|b|,|c|)) preprocessing for Lagrange reduction, O(1) per solution
+    """
+    a, b, c, d, e, f = coefficients
     if a < 0:
-        a, b, c, n = -a, -b, -c, -n
+        a, b, c, d, e, f = -a, -b, -c, -d, -e, -f
+    if a == 0:
+        return
 
     # Use Lagrange reduction to transform to an equivalent form with |b| <= a <= c
-    # Track the cumulative transform with matrix [[p, q], [r, s]]
+    # Track the transformation matrix [[p, q], [r, s]] where (x, y) = (pX + qY, rX + sY)
     p, q, r, s = 1, 0, 0, 1
     while not (abs(b) <= a <= c):
         if a > c:
             a, b, c = c, -b, a
             p, q, r, s = -q, p, -s, r
         elif abs(b) > a:
-            k = (b + a) // (2*a)
+            k = (b + a) // (2 * a)
             b, c = b - 2*a*k, a*k*k - b*k + c
             q, s = q - k*p, s - k*r
 
-    # Reduce the equation to X^2 + |Δ|Y^2 = 4an with X = 2ax + by and Y = y
-    N, D = 4*a*n, 4*a*c - b*b
-    if D < N and gcd(D, N) == 1:
-        # Handle Y = 0 case
-        if is_square(N):
-            sqrt_N = isqrt(N)
-            for root in (-sqrt_N, sqrt_N):
-                x, remainder = divmod(root, 2*a)
-                if not remainder:
-                    yield (p*x, r*x)
+    # Transform linear terms
+    d, e = d*p + e*r, d*q + e*s
 
-        # Use Cornacchia for positive X, Y
-        for U, V in cornacchia(D, N):
-            for X, Y in ((U, V), (U, -V), (-U, V), (-U, -V)):
-                x, remainder = divmod(X - b*Y, 2*a)
-                if not remainder:
-                    yield (p*x + q*Y, r*x + s*Y)
+    # Reduce to a quadratic in X as aX^2 + (bY + d)X + (cY^2 + eY + f) = 0
+    # This has real solutions only when its discriminant is >= 0
+    # We can rewrite this inequality as (b^2 - 4ac)Y^2 + (2bd - 4ae)Y + (d^2 - 4af) >= 0
+    A, B, C = b*b - 4*a*c, 2*b*d - 4*a*e, d*d - 4*a*f
+    D = B*B - 4*A*C
+    if D < 0:
         return
 
-    # Fallback to iteration over all Y such that |Δ|Y^2 <= N
-    for Y in range(-isqrt(N // D), isqrt(N // D) + 1):
-        X_squared = N - D*Y*Y
-        if not is_square(X_squared): continue
-        root = isqrt(X_squared)
-        for X in ((root, -root) if root else (0,)):
-            x, remainder = divmod(X - b*Y, 2*a)
-            if not remainder:
-                yield (p*x + q*Y, r*x + s*Y)
+    # Solve AY^2 + BY + C >= 0 to find Y bounds
+    sqrt_D = isqrt(D)
+    Y1, Y2 = (-B - sqrt_D) // (2 * A), -((B - sqrt_D) // (2 * A))
 
-def _solve_bqf_parabolic(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int]]:
+    # Enumerate Y in the valid range and solve for X
+    # Solve aX^2 + (bY + d)X + (cY^2 + eY + f) = 0 using quadratic formula
+    for Y in range(min(Y1, Y2) - 1, max(Y1, Y2) + 2):
+        for X in _integer_quadratic_roots(a, b*Y + d, c*Y*Y + e*Y + f):
+            yield (p*X + q*Y, r*X + s*Y)  # transform back to (x, y) solutions
+
+def _hyperbola(*coefficients: int) -> Iterator[tuple[int, int]]:
     """
-    Solve ax^2 + bxy + cy^2 = n when discriminant Δ = b^2 - 4ac = 0.
-    The form factors as (2ax + by)^2 = 4an.
+    Solve ax^2 + bxy + cy^2 + dx + ey + f = 0 when discriminant Δ = b^2 - 4ac > 0.
+
+    Complexity
+    ----------
+    O((√Δ) log Δ) for fundamental Pell solutions, O(1) per additional solution
     """
-    # If a = 0 and c = 0, the equation becomes 0 = n
-    if a == 0 and c == 0:
-        if n == 0: yield from integer_pairs()
-        return
+    a, b, c, d, e, f = coefficients
 
-    # When a = 0, Δ = b^2 = 0 implies b = 0, so the equation becomes cy^2 = n
-    if a == 0 and c != 0:
-        y_squared, remainder = divmod(n, c)
-        if not remainder and is_square(y_squared):
-            y = isqrt(y_squared)
-            family_1 = ((x, y) for x in integers())
-            family_2 = ((x, -y) for x in integers())
-            yield from (family_1 if y == 0 else alternating(family_1, family_2))
-        return
+    # Reduce to Pell-type equation u^2 - Δv^2 = N
+    # where v = 2ax + by + d, u = Δy - β, β = 2ae - bd, and N = β^2 + Δ(4af - d^2)
+    discriminant, beta = b*b - 4*a*c, 2*a*e - b*d
+    N = beta*beta + discriminant * (4*a*f - d*d)
 
-    # When c = 0, Δ = b^2 = 0 implies b = 0, so the equation becomes ax^2 = n
-    if a != 0 and c == 0:
-        x_squared, remainder = divmod(n, a)
-        if not remainder and is_square(x_squared):
-            x = isqrt(x_squared)
-            family_1 = ((x, y) for y in integers())
-            family_2 = ((-x, y) for y in integers())
-            yield from (family_1 if x == 0 else alternating(family_1, family_2))
-        return
-
-    # General case is (2ax + by)^2 = 4an
-    if is_square(N := 4*a*n):
-        sqrt_N = isqrt(N)
-        family_1 = bezout(2*a, b, sqrt_N)
-        family_2 = bezout(2*a, b, -sqrt_N)
-        yield from (family_1 if sqrt_N == 0 else alternating(family_1, family_2))
-
-def _solve_bqf_degenerate(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int]]:
-    """
-    Solve ax^2 + bxy + cy^2 = n when discriminant Δ = b^2 - 4ac > 0 is a perfect square.
-    """
-    all_divisors = lambda x: (sign * d for d in divisors(abs(x)) for sign in (1, -1))
-
-    # When c = 0, the equation becomes x(ax + by) = n
-    if c == 0 and n != 0:
-        for x in all_divisors(n):
-            y, remainder = divmod(n // x - a*x, b)
-            if not remainder:
-                yield (x, y)
-        return
-
-    # When a = 0, the equation becomes y(bx + cy) = n
-    if a == 0 and n != 0:
-        for y in all_divisors(n):
-            x, remainder = divmod(n // y - c*y, b)
-            if not remainder:
-                yield (x, y)
-        return
-
-    # When a = n = 0, the equation becomes y(bx + cy) = 0
-    if a == 0 and n == 0:
-        family_1 = bezout(b, c, 0)
-        family_2 = ((x, 0) for x in integers() if x != 0)
-        yield from alternating(family_1, family_2)
-        return
-
-    # When n = 0, we either have 2ax + (b + d)y = 0 or 2ax + (b - d)y = 0
-    d = isqrt(b*b - 4*a*c)
-    if n == 0 and a != 0:
-        family_1 = bezout(2*a, b + d, 0)
-        family_2 = (sol for sol in bezout(2*a, b - d, 0) if sol != (0, 0))
-        yield from alternating(family_1, family_2)
-        return
-
-    # General case is UV = 4an for U = 2ax + (b + d)y and V = 2ax + (b - d)y
-    N = 4*a*n
-    for U in all_divisors(N):
-        V = N // U
-        y, remainder = divmod(U - V, 2*d)
-        if remainder: continue
-        x, remainder = divmod(U - y * (b + d), 2*a)
-        if remainder: continue
-        yield (x, y)
-
-def _solve_bqf_indefinite(a: int, b: int, c: int, n: int) -> Iterator[tuple[int, int]]:
-    """
-    Solve ax^2 + bxy + cy^2 = n when discriminant Δ = b^2 - 4ac > 0
-    is not a perfect square.
-    """
-    # This becomes the generalized Pell equation X^2 - ΔY^2 = 4an
-    # with X = 2ax + by and Y = y
-    N, D = 4*a*n, b*b - 4*a*c
-
-    # If n = 0, the only solution is (0, 0)
-    if n == 0:
-        yield (0, 0)
-        return
-
-    # When X = 0, the equation becomes -(b^2 - 4ac)y^2 = 4an
-    y_squared, remainder = divmod(-N, D)
-    if not remainder and is_square(y_squared):
-        y = isqrt(y_squared)
-        x, remainder = divmod(-b*y, 2*a)
-        if not remainder:
+    def get_solutions(uv_values: Iterable) -> Iterator:
+        for u, v in uv_values:
+            y, remainder = divmod(u + beta, discriminant)
+            if remainder: continue
+            x, remainder = divmod(v - b*y - d, 2*a)
+            if remainder: continue
             yield (x, y)
-            yield (-x, -y)
 
-    # When Y = 0, the equation reduces to (2ax)^2 = 4an
-    x_squared, remainder = divmod(n, a)
-    if not remainder and is_square(x_squared):
-        x = isqrt(x_squared)
-        yield (x, 0)
-        yield (-x, 0)
+    # Compute general solutions
+    s = isqrt(discriminant)
+    if s * s == discriminant:
+        # For square discriminant we have u^2 - s^2v^2 = (u + sv)(u - sv) = N
+        if N == 0:
+            # If N = 0, we have u^2 = s^2v^2, so u = ± sv
+            yield from get_solutions((u, v) for v in integers() for u in (s*v, -s*v))
+        else:
+            # If N != 0, enumerate divisor pairs P, Q with product P * Q = |N|
+            for P in divisors(N):
+                if P > abs(Q := N // P): break
+                U = (P + Q) // 2
+                V, remainder = divmod(Q - P, 2*s)
+                if remainder: continue
+                yield from get_solutions({(U, V), (U, -V), (-U, V), (-U, -V)})
+    else:
+        # If u = 0 in Pell equation, we have v^2 = -N/Δ
+        if beta % discriminant == 0 and is_square(-N // discriminant):
+            v = isqrt(-N // discriminant)  # Δ | β implies Δ | N
+            yield from get_solutions([(0, v), (0, -v)])
 
-    # General case
-    for U, V in pell(D, N):
-        for X, Y in ((U, V), (U, -V), (-U, V), (-U, -V)):
-            x, remainder = divmod(X - b*Y, 2*a)
-            if not remainder:
-                yield (x, Y)
+        # If v = 0 in Pell equation, we have u^2 = N
+        if N > 0 and is_square(N):
+            u = isqrt(N)
+            yield from get_solutions([(u, 0), (-u, 0)])
+
+        # Solve the generalized Pell equation
+        for U, V in pell(discriminant, N):
+            yield from get_solutions({(U, V), (U, -V), (-U, V), (-U, -V)})
+
+def _degenerate_conic(*coefficients: int) -> Iterator[tuple[int, int]]:
+    """
+    Solve ax^2 + bxy + cy^2 + dx + ey + f = 0 when the conic is degenerate.
+    """
+    a, b, c, d, e, f = coefficients
+
+    # Multiplying by 4a, 4a(ax^2 + bxy + cy^2 + dx + ey + f) = 0
+    # becomes (2ax + (b-s)y)(2ax + (b+s)y) + 4adx + 4aey + 4af = 0
+    # which becomes (2ax + (b-s)y + g)(2ax + (b+s)y + h) = 0
+    # where s^2 = Δ, 4ad = 2a(g+h), 4ae = (b+s)g + (b-s)h, and 4af = gh,
+    # which implies g, h are roots of quadratic t^2 - 2dt + 4af
+    discriminant = b*b - 4*a*c
+    if discriminant < 0:
+        # Degenerate ellipse (single point)
+        yield from _ellipse(*coefficients)
+    elif discriminant == 0:
+        # Degenerate parabola (two parallel lines)
+        if is_square(d*d - 4*a*f):
+            offset = isqrt(d*d - 4*a*f)
+            g, h = d - offset, d + offset
+            line_1 = bezout(2*a, b, -g)
+            line_2 = bezout(2*a, b, -h) if offset != 0 else ()
+            yield from alternating(line_1, line_2)
+    elif discriminant > 0:
+        # Degenerate hyperbola (two intersecting lines)
+        if is_square(d*d - 4*a*f):
+            s, offset = isqrt(discriminant), isqrt(d*d - 4*a*f)
+            if 4*a*e - 2*b*d > 0:
+                g, h = d + offset, d - offset
+            else:
+                g, h = d - offset, d + offset
+
+            # Find intersection
+            line_1, line_2 = bezout(2*a, b - s, -g), bezout(2*a, b + s, -h)
+            y_int, remainder_y = divmod(g - h, 2*s)
+            x_int, remainder_x = divmod((b-s)*h - (b+s)*g, 4*a*s)
+            if remainder_x == 0 and remainder_y == 0:
+                line_2 = (point for point in line_2 if point != (x_int, y_int))
+
+            yield from alternating(line_1, line_2)
+
+def _conic_linear_in_x(*coefficients) -> Iterator[tuple[int, int]]:
+    """
+    Solve bxy + cy^2 + dx + ey + f = 0 (no x^2 term).
+    """
+    b, c, d, e, f = coefficients
+    g = lambda y: c*y*y + e*y + f
+    if b == 0 and c == 0:
+        # Reduces to dx + ey + f = 0
+        yield from bezout(d, e, -f)
+    elif b == 0 and c != 0 and d == 0:
+        # Reduces to cy^2 + ey + f = 0
+        y_roots = _integer_quadratic_roots(c, e, f)
+        yield from alternating(*(bezout(0, 1, y) for y in y_roots))
+    elif b == 0 and c != 0 and d != 0:
+        # Reduces to x = -(cy^2 + ey + f) / d
+        def family(y0: int) -> Iterator:
+            for _, y in bezout(d, 1, y0):
+                x, remainder = divmod(g(y), -d)
+                if remainder == 0:
+                    yield (x, y)
+
+        y_residues = [y for y in range(abs(d)) if g(y) % d == 0]
+        yield from alternating(*(family(y) for y in y_residues))
+    elif b != 0 and d == 0 and f == 0:
+        # Reduces to y(bx + cy + e) = 0
+        yield from alternating(
+            ((x, 0) for x in integers()),
+            ((x, y) for x, y in bezout(b, c, -e) if y != 0)
+        )
+    elif b != 0 and d == 0 and f != 0:
+        # Reduces to x = -(f/y + cy + e) / b
+        for divisor in divisors(f):
+            for y in (divisor, -divisor):
+                x, remainder = divmod(f // y + c*y + e, -b)
+                if remainder == 0:
+                    yield (x, y)
+    else:
+        # Reduces to x = (cy^2 + ey + f) / (by + d)
+        # Polynomial division of numerator by denominator
+        # gives cy^2 + ey + f = (by + d) * Q(y) + R
+        # where R = cd^2 - ebd + fb^2 is the constant remainder
+        # It follows that (by + d) | (cy^2 + ey + f) if and only if (by + d) | R
+        R = c*d*d - e*b*d + f*b*b
+
+        # Check for singular line: y = -d/b makes entire equation vanish
+        y_singular, remainder = divmod(-d, b)
+        singular_line = (remainder == 0 and g(y_singular) == 0)
+
+        # Generate all non-singular solutions
+        def other_solutions():
+            if R == 0:
+                # The numerator factors as (by + d) × (linear), giving line solutions
+                # Line solutions from: bx + bcy + (eb - cd) = 0
+                for x, y in bezout(b, b*c, c*d - e*b):
+                    if not (singular_line and y == y_singular):
+                        yield (x, y)
+            else:
+                # Finitely many points where (by + d) must divide R
+                for divisor in divisors(R):
+                    for k in (divisor, -divisor):
+                        y, remainder = divmod(k - d, b)
+                        if remainder: continue
+                        x, remainder = divmod(g(y), -k)
+                        if remainder == 0:
+                            yield (x, y)
+
+        yield from alternating(
+            bezout(0, 1, y_singular) if singular_line else (),
+            other_solutions(),
+        )
+
+def _integer_quadratic_roots(A: int, B: int, C: int) -> list[int]:
+    """
+    Return integer roots to the quadratic equation Ax^2 + Bx + C = 0.
+    """
+    D = B*B - 4*A*C
+    if D < 0 or not is_square(D):
+        return []
+
+    roots, sqrt_D = [], isqrt(D)
+    for sign in (0,) if D == 0 else (1, -1):
+        X, remainder = divmod(-B + sign*sqrt_D, 2*A)
+        if remainder == 0:
+            roots.append(X)
+
+    return roots
 
 def _euclid(max_m: int | None = None) -> Iterator[tuple[int, int, int]]:
     """
@@ -4970,9 +5036,9 @@ def perfect_power(n: int) -> tuple[int, int]:
         return (-1, 3)
 
     n = -n if (is_negative := n < 0) else n
-    if not is_negative and (r := isqrt(n)) ** 2 == n:
+    if not is_negative and (r := isqrt(n)) * r == n:
         return (r, 2)
-    for p in primes(low=3, high=n.bit_length()):
+    for p in primes(low=3, high=n.bit_length()-1):
         r = iroot(n, p)
         if pow(r, p) == n:
             return ((-r if is_negative else r), p)
