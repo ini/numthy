@@ -787,7 +787,7 @@ def _fenwick_tree_update(tree: list[Number], index: int, value: Number, tree_siz
         tree[i] += value
 
 @small_cache
-def _fenwick_tree_edges(tree_size: int) -> tuple[tuple[int, int]]:
+def _fenwick_tree_edges(tree_size: int) -> tuple[tuple[int, int], ...]:
     """
     Get all (index, parent_index) pairs for a Binary Indexed Tree (Fenwick Tree).
     """
@@ -1007,31 +1007,6 @@ def _gen_prime_factors(n: int) -> Iterator[int]:
                     break
                 else:
                     B = int((B or 30000) * 1.25)  # increase size of factor base
-
-def _count_distinct_prime_factors(n: int) -> int | None:
-    """
-    Count distinct prime factors of n.
-    Returns None if n has a squared prime factor.
-    """
-    if n == 1:
-        return 0
-    if is_prime(n):
-        return 1
-
-    # Use iterative factorization
-    stack, seen_prime_factors = deque([n]), set()
-    while stack:
-        n = stack.popleft()
-        if is_prime(n):
-            if n in seen_prime_factors:
-                return None  # found squared factor
-            else:
-                seen_prime_factors.add(n)
-        elif n > 1:
-            d = _brent(n)
-            stack.extend([d, n // d])
-
-    return len(seen_prime_factors)
 
 def _partial_factorization(
     n: int,
@@ -2024,33 +1999,20 @@ def mobius(n: int) -> int:
         raise ValueError("n must be a positive integer.")
     if n == 1:
         return 1
+    if is_square(n):
+        return 0
     if is_prime(n):
         return -1
 
-    # Trial division with small primes - check for squared factors immediately
-    num_factors = 0
-    for p in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53):
-        if n % p == 0:
-            num_factors += 1
-            n //= p
-            if n % p == 0:  # squared factor
-                return 0
+    mu, seen = 1, set()
+    for p in _gen_prime_factors(n):
+        if p in seen:
+            return 0
+        else:
+            seen.add(p)
+            mu = -mu
 
-    if n == 1:
-        return 1 if num_factors % 2 == 0 else -1
-
-    # Fast perfect square check
-    sqrt_n = isqrt(n)
-    if sqrt_n * sqrt_n == n:
-        return 0
-
-    # Factor remaining
-    num_remaining_factors = _count_distinct_prime_factors(n)
-    if num_remaining_factors is None:
-        return 0
-
-    num_factors += num_remaining_factors
-    return 1 if num_factors % 2 == 0 else -1
+    return mu
 
 def mobius_range(N: int) -> list[int]:
     """
@@ -2140,7 +2102,7 @@ def carmichael(n: int) -> int:
 def _prime_factor_range(N: int) -> list[int]:
     """
     Find a prime factor for each n = 0, 1, 2, ..., N - 1.
-    For composite n, stores the largest prime factor < √n.
+    For composite n, stores the largest prime factor < √N.
     """
     prime_divisor = list(range(N))
     if N >= 1:
@@ -2567,8 +2529,8 @@ def _dirichlet_character_prime_power(p: int, e: int, k: int) -> Callable[[int], 
         # Find smallest primitive root g mod p^2 (i.e. the Conrey generator)
         # We have g < 2p, and g will be a primitive root mod p^e for all e > 0
         p2, phi = p * p, p * (p - 1)
-        primes = set(_gen_prime_factors(phi))
-        is_primitive_root = lambda g: all(pow(g, phi // r, p2) != 1 for r in primes)
+        prime_set = set(_gen_prime_factors(phi))
+        is_primitive_root = lambda g: all(pow(g, phi // r, p2) != 1 for r in prime_set)
         g = next(i for i in range(2, 2*p) if is_primitive_root(i))
 
         # Exact values for 1st, 2nd, and 4th roots of unity
@@ -3608,7 +3570,7 @@ def pillai(a: int, b: int, c: int) -> Iterator[tuple[int, int]]:
 
     # Use a discrete log sieve to restrict the search space
     # For each p where gcd(p, ab) = 1, we need a^x = (c + b^y) (mod p)
-    # We can take discrete log for each as x = dlog_a(c + b^y) (mod ord_p(a))
+    # We can take the discrete log for each as x = dlog_a(c + b^y) (mod ord_p(a))
     # and combine these constraints via the Chinese Remainder Theorem
     a_mod = [a % p for p in sieve_primes]
     b_mod = [b % p for p in sieve_primes]
@@ -5074,9 +5036,9 @@ def perfect_power(n: int) -> tuple[int, int]:
         return (-1, 3)
 
     n = -n if (is_negative := n < 0) else n
-    if not is_negative and (r := isqrt(n)) ** 2 == n:
+    if not is_negative and (r := isqrt(n)) * r == n:
         return (r, 2)
-    for p in primes(low=3, high=n.bit_length()):
+    for p in primes(low=3, high=n.bit_length()-1):
         r = iroot(n, p)
         if pow(r, p) == n:
             return ((-r if is_negative else r), p)
