@@ -975,9 +975,21 @@ def _gen_prime_factors(n: int) -> Iterator[int]:
         if is_prime(n):
             yield n
         elif n > 1:
-            num_bits = n.bit_length()
+            # Fermat factorization
+            b_squared, factors = (a := isqrt(n) + 1) * a - n, None
+            for _ in range(3):
+                b = isqrt(b_squared)
+                if b_squared - b*b == 0:
+                    factors = [a + b, a - b]
+                    break
+                b_squared += 2*a + 1
+                a += 1
+            if factors:
+                stack.extend(factors)
+                continue
 
             # Brent for small factors (more aggressively capped for 64+ bit inputs)
+            num_bits = n.bit_length()
             max_attempts = 2 if num_bits <= 64 else 1
             max_iterations = 2**18 if num_bits <= 64 else 2**16
             d = _brent(n, max_attempts=max_attempts, max_iterations=max_iterations)
@@ -993,7 +1005,7 @@ def _gen_prime_factors(n: int) -> Iterator[int]:
                 continue
 
             # ECM to peel off medium-sized factors
-            d = _ecm(n, max_curves=(32 if num_bits >= 128 else None))
+            d = _ecm(n, max_curves=(32 if num_bits > 100 else None))
             if 1 < d < n:
                 stack.extend([d, n // d])
                 continue
