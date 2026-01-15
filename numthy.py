@@ -902,8 +902,8 @@ def prime_factors(n: int) -> tuple[int, ...]:
     """
     Get all prime factors of n in sorted order (with multiplicity).
 
-    Uses a combination of trial division, Brent's variant of Pollard's rho
-    factorization method, Lenstra's elliptic curve method (ECM),
+    Uses a combination of trial division, Fermat's factorization method,
+    Brent's variant of Pollard's rho, Lenstra's elliptic curve method (ECM),
     and a self-initializing quadratic sieve (SIQS).
 
     Parameters
@@ -975,9 +975,13 @@ def _gen_prime_factors(n: int) -> Iterator[int]:
         if is_prime(n):
             yield n
         elif n > 1:
-            num_bits = n.bit_length()
+            # Fermat factorization
+            if (factors := _fermat_factorization(n)):
+                stack.extend(factors)
+                continue
 
             # Brent for small factors (more aggressively capped for 64+ bit inputs)
+            num_bits = n.bit_length()
             max_attempts = 2 if num_bits <= 64 else 1
             max_iterations = 2**18 if num_bits <= 64 else 2**16
             d = _brent(n, max_attempts=max_attempts, max_iterations=max_iterations)
@@ -993,7 +997,7 @@ def _gen_prime_factors(n: int) -> Iterator[int]:
                 continue
 
             # ECM to peel off medium-sized factors
-            d = _ecm(n, max_curves=(32 if num_bits >= 128 else None))
+            d = _ecm(n, max_curves=(32 if num_bits > 100 else None))
             if 1 < d < n:
                 stack.extend([d, n // d])
                 continue
@@ -1033,6 +1037,18 @@ def _partial_factorization(
         partial_pf[n] = n = 1
 
     return partial_pf, n
+
+def _fermat_factorization(n: int, num_iterations: int = 3) -> tuple[int, int] | None:
+    """
+    Use Fermat's factorization method to factor n as the difference of two squares.
+    """
+    b_squared = (a := isqrt(n) + 1) * a - n
+    for _ in range(num_iterations):
+        b = isqrt(b_squared)
+        if b_squared - b*b == 0:
+            return (a + b, a - b)
+        b_squared += 2*a + 1
+        a += 1
 
 def _brent(
     n: int,
@@ -1182,9 +1198,8 @@ def _ecm(
     plan = _ecm_stage_2_plan(B1, B2)
 
     for _ in range(max_curves):
-        # Suyama's parametrization typically uses sigma >= 6.
+        # Pick a random curve
         sigma = secrets.randbelow(n - 7) + 6 if n > 7 else 6
-
         A24, P, factor = _ecm_suyama_curve(n, sigma)
         if factor is not None:
             return factor
@@ -1192,6 +1207,8 @@ def _ecm(
             continue
 
         # Stage 1
+        # Multiply point P by prime powers p^⌊log_p B1⌋ for p <= B1
+        # Periodically check the GCD with the Z-coordinate for a non-trivial factor
         Q = P
         for i, prime_power in enumerate(prime_powers, start=1):
             Q = _montgomery_ladder(prime_power, Q, A24, n)
@@ -1199,19 +1216,20 @@ def _ecm(
                 if 1 < (g := gcd(Q[1], n)) < n:
                     return g
 
+        # Check the Z-coordinate for a non-trivial factor
         if 1 < (g := gcd(Q[1], n)) < n:
             return g
         if g == n:
-            # Rare degeneracy; try to salvage.
-            gg = gcd(Q[0], n)
-            if 1 < gg < n:
-                return gg
+            # Rare degeneracy, check the X-coordinate instead
+            if 1 < (g := gcd(Q[0], n)) < n:
+                return g
             continue
 
         # Stage 2
+        # For each prime B1 <= p <= B2, compute point pQ
+        # and check GCD with the Z-coordinate
         if B2 > B1:
-            g = _ecm_stage_2(n, A24, Q, plan)
-            if 1 < g < n:
+            if 1 < (g := _ecm_stage_2(n, A24, Q, plan)) < n:
                 return g
 
     return 1  # failure, return trivial factor
@@ -1345,7 +1363,7 @@ def _ecm_stage_2_plan(
     """
     Precompute a stage-2 plan for ECM using baby-step giant-step (BSGS) strategy.
 
-    Represents each prime r in (B1, B2] as r = k*D ± offset, where D ≈ √B2
+    Represents each prime r in (B1, B2] as r = kD ± offset, where D ≈ √B2
     is the "giant step" size, k indicates which multiple of D is closest to r,
     and offset is the distance from r to that multiple (0 <= offset <= D/2).
 
@@ -1397,7 +1415,7 @@ def _ecm_stage_2(
         return 1  # failure, return trivial factor
 
     # Baby steps - compute [d]Q for small offsets d
-    # Primes p in (B1, B2] are written as p = k*D ± d. Precompute [d]Q values.
+    # Primes p in (B1, B2] are written as p = kD ± d. Precompute [d]Q values.
     baby = {1: Q} if baby_steps else {}
     max_baby_step = max(baby_steps, default=0)
     if max_baby_step >= 3:
