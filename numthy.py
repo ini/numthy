@@ -128,7 +128,7 @@ def is_prime(n: int) -> bool:
     elif n < 55245642489451:
         bases = (2, 141889084524735, 1199124725622454117, 11096072698276303650)
     else:
-        return _baillie_psw(n) # BPSW has no known pseudoprimes < 2^64
+        return _baillie_psw(n)  # BPSW has zero known pseudoprimes
 
     return _miller_rabin(n, bases)
 
