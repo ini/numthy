@@ -38,9 +38,8 @@ __all__ = [
     # Factorization
     'prime_factors', 'prime_factorization', 'divisors',
     # Arithmetic Functions
-    'omega', 'big_omega', 'liouville', 'divisor_count', 'divisor_sum',
-    'divisor_function', 'radical', 'mobius', 'totient', 'carmichael',
-    'multiplicative_range',
+    'omega', 'big_omega', 'divisor_count', 'divisor_sum', 'divisor_function',
+    'radical', 'mobius', 'totient', 'carmichael', 'multiplicative_range',
     # Modular Arithmetic
     'egcd', 'crt', 'coprimes', 'multiplicative_order', 'primitive_root',
     'legendre', 'jacobi', 'kronecker', 'dirichlet_character',
@@ -50,13 +49,13 @@ __all__ = [
     'bezout', 'cornacchia', 'pell', 'conic', 'pythagorean_triples', 'pillai',
     # Lattice Methods
     'integer_solve', 'integer_nullspace', 'lll_reduce', 'babai_closest_vector',
-    # Combinatorics
-    'pascal', 'factorial_valuation', 'binomial_valuation',
-    'partition_numbers', 'count_partitions', 'euler_transform',
+    # Recurrences
+    'find_recurrence', 'solve_recurrence', 'recurrence_sequence', 'companion_matrix',
     # Integer Sequences
-    'integers', 'integer_pairs',
-    'lucas', 'fibonacci', 'fibonacci_index', 'fibonacci_numbers',
+    'integers', 'integer_pairs', 'lucas',
+    'fibonacci', 'fibonacci_index', 'fibonacci_numbers',
     'polygonal', 'polygonal_index', 'polygonal_numbers', 'is_polygonal',
+    'partition', 'partition_numbers', 'euler_transform',
     # Appendix
     'nth', 'alternating', 'periodic_continued_fraction', 'convergents',
     'permutation', 'polynomial', 'iroot', 'ilog',
@@ -1884,14 +1883,6 @@ def big_omega(n: int) -> int:
     if n < 1:
         raise ValueError("n must be a positive integer.")
     return sum(1 for _ in _gen_prime_factors(n))
-
-def liouville(n: int) -> int:
-    """
-    Compute the Liouville function λ(n) for a positive integer n.
-    """
-    if n < 1:
-        raise ValueError("n must be a positive integer.")
-    return -1 if big_omega(n) & 1 else 1
 
 def divisor_count(n: int) -> int:
     """
@@ -4327,202 +4318,205 @@ def _nearest_int(q: Fraction) -> int:
 
 
 ########################################################################
-############################ Combinatorics #############################
+############################## Recurrences #############################
 ########################################################################
 
-def pascal(num_rows: int | None = None) -> Iterator[tuple[tuple[int, int], int]]:
+def find_recurrence(
+    terms: Sequence[int],
+    max_order: int = 10
+) -> tuple[list[int], list[int]] | None:
     """
-    Generate values in Pascal's triangle, row by row, left to right.
+    Discover linear recurrence relation from sequence terms via integer linear algebra.
+
+    Given sequence values a(0), a(1), ..., a(N-1), finds the minimal order
+    k ≤ max_order and coefficients [c₁, c₂, ..., cₖ] such that
+    a(n) = c₁·a(n-1) + c₂·a(n-2) + ... + cₖ·a(n-k) for all n ≥ k.
+
+    Constructs the Hankel matrix A where A[i,j] = a(i+j) and solves the system Ax = b.
 
     Parameters
     ----------
-    num_rows : int
-        Number of rows to generate (infinite by default)
+    terms : Sequence[int]
+        Sequence values [a(0), a(1), ..., a(N-1)]. Must have at least 2k terms
+        to discover an order-k recurrence.
+    max_order : int, optional
+        Maximum recurrence order to search for (default: 10). The function tries
+        orders k = 1, 2, ..., min(max_order, len(terms)//2) until finding a valid
+        recurrence or exhausting the search space.
+
+    Returns
+    -------
+    coefficients : list[int]
+        Recurrence coefficients [c₁, c₂, ..., cₖ] for minimal order k
+    initial_values : list[int]
+        Initial sequence values [a(0), a(1), ..., a(k-1)]
+
+    Returns None if no recurrence of order ≤ max_order exists or if insufficient
+    terms are provided.
+
+    Examples
+    --------
+    Discover Fibonacci recurrence F(n) = F(n-1) + F(n-2):
+
+    >>> find_recurrence([0, 1, 1, 2, 3, 5, 8, 13, 21, 34])
+    ([1, 1], [0, 1])
+
+    Discover Lucas recurrence L(n) = L(n-1) + L(n-2):
+
+    >>> find_recurrence([2, 1, 3, 4, 7, 11, 18, 29, 47, 76])
+    ([1, 1], [2, 1])
+
+    Discover Tribonacci recurrence T(n) = T(n-1) + T(n-2) + T(n-3):
+
+    >>> find_recurrence([0, 0, 1, 1, 2, 4, 7, 13, 24, 44, 81])
+    ([1, 1, 1], [0, 0, 1])
+
+    Notes
+    -----
+    The Hankel matrix for order k is constructed as:
+
+        A = [[a(0),   a(1),   ..., a(k-1)  ],
+             [a(1),   a(2),   ..., a(k)    ],
+             [...,    ...,    ..., ...     ],
+             [a(k-1), a(k),   ..., a(2k-2) ]]
+
+    The linear system Ax = b is solved where b = [a(k), a(k+1), ..., a(2k-1)]ᵀ
+    and x = [c₁, c₂, ..., cₖ]ᵀ.
+
+    Complexity
+    ----------
+    Time: O(k³) for solving k×k Hankel system via integer_solve()
+    Space: O(k²) for Hankel matrix construction
+    """
+    ...
+
+def solve_recurrence(
+    coefficients: Sequence[int],
+    initial: Sequence[int],
+    n: int,
+) -> int:
+    """
+    Compute the n-th term of a linear recurrence relation.
+
+    Solves a(n) = c₁·a(n-1) + c₂·a(n-2) + ... + cₖ·a(n-k) for given
+    coefficients and initial values using matrix exponentiation.
+
+    Parameters
+    ----------
+    coefficients : Sequence[int]
+        Recurrence coefficients [c₁, c₂, ..., cₖ]
+    initial : Sequence[int]
+        Initial values [a(0), a(1), ..., a(k-1)]
+    n : int
+        Index of term to compute
+
+    Returns
+    -------
+    int
+        The n-th term a(n)
+
+    Examples
+    --------
+    >>> # Fibonacci via recurrence
+    >>> solve_recurrence([1, 1], [0, 1], 10)
+    55
+
+    Complexity
+    ----------
+    O(k³ log n) time via matrix exponentiation
+    O(k²) space for companion matrix
+    """
+    ...
+
+def recurrence_sequence(
+    coefficients: Sequence[int],
+    initial: Sequence[int],
+) -> Iterator[int]:
+    """
+    Generate infinite sequence satisfying a linear recurrence relation.
+
+    Yields a(0), a(1), a(2), ... where a(n) = c₁·a(n-1) + ... + cₖ·a(n-k).
+
+    Parameters
+    ----------
+    coefficients : Sequence[int]
+        Recurrence coefficients [c₁, c₂, ..., cₖ]
+    initial : Sequence[int]
+        Initial values [a(0), a(1), ..., a(k-1)]
 
     Yields
     ------
-    (n, k) : tuple[int, int]
-        Index of binomial coefficient
     a : int
-        Binomial coefficient a = (n choose k)
-    """
-    row = [1]
-    for n in itertools.count() if num_rows is None else range(num_rows):
-        yield from (((n, k), v) for k, v in enumerate(row))  # current row
-        row = [1, *map(int.__add__, row, row[1:]), 1]  # next row
+        Next term in the sequence
 
-def factorial_valuation(n: int, p: int) -> int:
-    """
-    Compute the p-adic valuation of n!, i.e., the exponent of p in n!.
-
-    Uses Legendre's formula: v_p(n!) = (n - S_p(n)) / (p - 1),
-    where S_p(n) is the digit sum of n in base p.
-
-    Parameters
-    ----------
-    n : int
-        Non-negative integer
-    p : int
-        Prime number
+    Examples
+    --------
+    >>> # Fibonacci sequence
+    >>> fib = recurrence_sequence([1, 1], [0, 1])
+    >>> [next(fib) for _ in range(10)]
+    [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
 
     Complexity
     ----------
-    O(logₚ n) time for base conversion and digit sum.
-    O(logₚ n) space.
+    O(k) time per term, O(k) space
     """
-    if n < 0:
-        raise ValueError("n must be non-negative")
-    if not is_prime(p):
-        raise ValueError("p must be prime")
-    if n == 0:
-        return 0
+    ...
 
-    return (n - sum(_digits_in_base(n, p))) // (p - 1)
-
-def binomial_valuation(n: int, k: int, p: int) -> int:
+def companion_matrix(coefficients: Sequence[int]) -> Matrix[int]:
     """
-    Compute the p-adic valuation of binomial coefficient C(n, k).
+    Return the companion matrix for a linear recurrence relation.
 
-    Uses Kummer's theorem: v_p(C(n, k)) equals the number of carries
-    when adding k and (n - k) in base p.
+    For recurrence a(n) = c₁·a(n-1) + c₂·a(n-2) + ... + cₖ·a(n-k),
+    constructs the k×k companion matrix C such that:
+        [a(n), a(n-1), ..., a(n-k+1)]ᵀ = C · [a(n-1), a(n-2), ..., a(n-k)]ᵀ
+
+    Matrix form:
+        ┌ c₁  c₂  c₃  ... cₖ  ┐
+        │ 1   0   0   ... 0   │
+    C = │ 0   1   0   ... 0   │
+        │ ... ... ... ... ... │
+        └ 0   0   0   ... 0   ┘
 
     Parameters
     ----------
+    coefficients : Sequence[int]
+        Recurrence coefficients [c₁, c₂, ..., cₖ]
+
+    Returns
+    -------
+    Matrix[int]
+        k×k companion matrix as list of lists
+    """
+    ...
+
+def _matrix_power(M: Matrix[int], n: int) -> Matrix[int]:
+    """
+    Compute M^n for integer matrix M via binary exponentiation.
+
+    Used internally by solve_recurrence() for fast computation.
+    This is integer linear algebra (Section 7 methods).
+
+    Parameters
+    ----------
+    M : Matrix[int]
+        Square integer matrix (list of lists)
     n : int
-        Non-negative integer
-    k : int
-        Non-negative integer with k <= n
-    p : int
-        Prime number
+        Exponent (non-negative)
+
+    Returns
+    -------
+    Matrix[int]
+        M^n as integer matrix
 
     Complexity
     ----------
-    O(logₚ n) time and space for base conversion and carry computation.
+    O(k³ log n) time for k×k matrix
+    O(k²) space
     """
-    if not (0 <= k <= n):
-        raise ValueError("Must have 0 <= k <= n")
-    if not is_prime(p):
-        raise ValueError("p must be prime")
-    if k == 0 or k == n:
-        return 0
-
-    a_digits, b_digits = _digits_in_base(k, p), _digits_in_base(n - k, p)
-    total_carries, current_carry = 0, 0
-    for a, b in itertools.zip_longest(a_digits, b_digits, fillvalue=0):
-        total = a + b + current_carry
-        current_carry = total // p
-        total_carries += current_carry
-
-    return total_carries
-
-def partition_numbers(mod: int | None = None) -> Iterator[int]:
-    """
-    Generate the values of the partition function using Euler's pentagonal recurrence.
-
-    Complexity
-    ----------
-    O(n³ᐟ²) amortized time per term (n-th partition uses O(√n) pentagonal offsets).
-    O(n) space to store previous partition values.
-    """
-    yield 1
-    n, k = 0, 1
-    partitions, euler_pentagonal = [1], deque()
-
-    while True:
-        n += 1
-
-        # Extend generalized pentagonal numbers to cover offsets up to n
-        while not euler_pentagonal or euler_pentagonal[-1][1] <= n:
-            sign = 1 if k % 2 == 1 else -1
-            euler_pentagonal.append((sign, k * (3 * k - 1) // 2))
-            euler_pentagonal.append((sign, k * (3 * k + 1) // 2))
-            k += 1
-
-        # Euler's recurrence: p(n) = Σ sign * p(n - offset)
-        p = 0
-        for sign, off in euler_pentagonal:
-            if off > n: break
-            p += sign * partitions[n - off]
-
-        p = p % mod if mod else p
-        yield p
-        partitions.append(p)
-
-def count_partitions(n: int, restrict: Callable[[int], bool] | None = None) -> int:
-    """
-    Return the number of partitions of integer n.
-
-    Parameters
-    ----------
-    n : int
-        Integer to partition
-    restrict : Callable(int) -> bool
-        Function indicating integers that can be used in the partition,
-        where restrict(k) = True means integer k can be used
-    """
-    if n < 0:
-        raise ValueError("n must be a non-negative integer")
-    if restrict:
-        return euler_transform(restrict)(n)
-    else:
-        return nth(partition_numbers(), n + 1)
-
-@small_cache
-def euler_transform(a: Callable[[int], int]) -> Callable[[int], int]:
-    """
-    Return the Euler transform of integer sequence a.
-
-    Parameters
-    ----------
-    a : Callable(int) -> int
-        Integer sequence to transform
-    """
-    b_values = [1]
-
-    @lru_cache(maxsize=None)
-    def c(n: int) -> int:
-        return sum(d * a(d) for d in divisors(n))
-
-    def b(n: int) -> int:
-        while len(b_values) <= n:
-            i = len(b_values)
-            total = c(i)
-            for k in range(1, i):
-                total += c(k) * b_values[i - k]
-
-            b_values.append(total // i)
-
-        return b_values[n]
-
-    return b
-
-def _digits_in_base(n: int, b: int) -> tuple[int, ...]:
-    """
-    Return the digits of integer n in base b,
-    from least significant digit to most significant digit.
-    """
-    if abs(b) < 2:
-        raise ValueError("|b| must be greater than or equal to 2")
-    if n < 0 and b > 0:
-        raise ValueError("Positive base b requires n >= 0")
-    elif n == 0:
-        return (0,)
-
-    # Long division to extract digits
-    digits = []
-    while n != 0:
-        n, r = divmod(n, b)
-        if r < 0:
-            r += abs(b)
-            n += 1
-        digits.append(r)
-
-    return tuple(digits)
-
-
+    ...
 
 ########################################################################
-######################### Integer Sequences ###########################
+########################### Integer Sequences ##########################
 ########################################################################
 
 def integers() -> Iterator[int]:
@@ -4749,6 +4743,87 @@ def is_polygonal(s: int, n: int) -> bool:
     D = 8 * n * (s - 2) + (s - 4) * (s - 4)
     sqrt_D = isqrt(D)
     return sqrt_D*sqrt_D == D and (sqrt_D + s - 4) % (2*s - 4) == 0
+
+def partition(n: int, restrict: Callable[[int], bool] | None = None) -> int:
+    """
+    Return the n-th partition number p(n).
+
+    Parameters
+    ----------
+    n : int
+        Integer to partition
+    restrict : Callable(int) -> bool
+        Function indicating integers that can be used in the partition,
+        where restrict(k) = True means integer k can be used
+    """
+    if n < 0:
+        raise ValueError("n must be a non-negative integer")
+    if restrict:
+        return euler_transform(restrict)(n)
+    else:
+        return nth(partition_numbers(), n + 1)
+
+def partition_numbers(mod: int | None = None) -> Iterator[int]:
+    """
+    Generate values of the partition function p(n) via Euler's pentagonal recurrence.
+
+    Complexity
+    ----------
+    O(n³ᐟ²) amortized time per term (n-th partition uses O(√n) pentagonal offsets).
+    O(n) space to store previous partition values.
+    """
+    yield 1
+    n, k = 0, 1
+    partitions, euler_pentagonal = [1], deque()
+
+    while True:
+        n += 1
+
+        # Extend generalized pentagonal numbers to cover offsets up to n
+        while not euler_pentagonal or euler_pentagonal[-1][1] <= n:
+            sign = 1 if k % 2 == 1 else -1
+            euler_pentagonal.append((sign, k * (3 * k - 1) // 2))
+            euler_pentagonal.append((sign, k * (3 * k + 1) // 2))
+            k += 1
+
+        # Euler's recurrence: p(n) = Σ sign * p(n - offset)
+        p = 0
+        for sign, off in euler_pentagonal:
+            if off > n: break
+            p += sign * partitions[n - off]
+
+        p = p % mod if mod else p
+        yield p
+        partitions.append(p)
+
+@small_cache
+def euler_transform(a: Callable[[int], int]) -> Callable[[int], int]:
+    """
+    Return the Euler transform of integer sequence a.
+
+    Parameters
+    ----------
+    a : Callable(int) -> int
+        Integer sequence to transform
+    """
+    b_values = [1]
+
+    @lru_cache(maxsize=None)
+    def c(n: int) -> int:
+        return sum(d * a(d) for d in divisors(n))
+
+    def b(n: int) -> int:
+        while len(b_values) <= n:
+            i = len(b_values)
+            total = c(i)
+            for k in range(1, i):
+                total += c(k) * b_values[i - k]
+
+            b_values.append(total // i)
+
+        return b_values[n]
+
+    return b
 
 
 
