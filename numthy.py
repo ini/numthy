@@ -9,6 +9,7 @@ import bisect
 import cmath
 import hashlib
 import hmac
+import inspect
 import itertools
 import secrets
 import sys
@@ -37,9 +38,9 @@ __all__ = [
     # Factorization
     'prime_factors', 'prime_factorization', 'divisors',
     # Arithmetic Functions
-    'divisor_function', 'divisor_count_range', 'divisor_function_range',
-    'aliquot_sum_range', 'radical', 'radical_range', 'mobius', 'mobius_range',
-    'totient', 'totient_range', 'carmichael',
+    'omega', 'big_omega', 'liouville', 'divisor_count', 'divisor_sum',
+    'divisor_function', 'radical', 'mobius', 'totient', 'carmichael',
+    'multiplicative_range',
     # Modular Arithmetic
     'egcd', 'crt', 'coprimes', 'multiplicative_order', 'primitive_root',
     'legendre', 'jacobi', 'kronecker', 'dirichlet_character',
@@ -1868,10 +1869,49 @@ def _nullspace_gf2(rows: list[int]) -> list[int]:
 ######################### Arithmetic Functions #########################
 ########################################################################
 
+def omega(n: int) -> int:
+    """
+    Compute the value of ω(n), the number of distinct prime factors of n.
+    """
+    if n < 1:
+        raise ValueError("n must be a positive integer.")
+    return len(set(_gen_prime_factors(n)))
+
+def big_omega(n: int) -> int:
+    """
+    Compute the value of Ω(n), the number of prime factors of n (with multiplicity).
+    """
+    if n < 1:
+        raise ValueError("n must be a positive integer.")
+    return sum(1 for _ in _gen_prime_factors(n))
+
+def liouville(n: int) -> int:
+    """
+    Compute the Liouville function λ(n) for a positive integer n.
+    """
+    if n < 1:
+        raise ValueError("n must be a positive integer.")
+    return -1 if big_omega(n) & 1 else 1
+
+def divisor_count(n: int) -> int:
+    """
+    Compute the value of σ_0(n), the number of divisors of n.
+    """
+    if n < 1:
+        raise ValueError("n must be a positive integer.")
+    return prod(e + 1 for e in prime_factorization(n).values())
+
+def divisor_sum(n: int) -> int:
+    """
+    Compute the value of σ_1(n), the sum of divisors of n.
+    """
+    if n < 1:
+        raise ValueError("n must be a positive integer.")
+    return prod((p**(e + 1) - 1) // (p - 1) for p, e in prime_factorization(n).items())
+
 def divisor_function(n: int, k: int = 1) -> int:
     """
-    Compute the value of the divisor function σ_k(n),
-    where σ_k(n) = ∑_{d|n} d^k.
+    Compute the value of the divisor function σ_k(n), where σ_k(n) = ∑_{d|n} d^k.
 
     Parameters
     ----------
@@ -1891,83 +1931,6 @@ def divisor_function(n: int, k: int = 1) -> int:
     else:
         return prod((pow(p, k * (e + 1)) - 1) // (pow(p, k) - 1) for p, e in pf.items())
 
-def divisor_count_range(N: int) -> list[int]:
-    """
-    Find the number of divisors d(n) for each n = 0, 1, 2, ..., N - 1.
-    Includes dummy value d(0) = 1.
-
-    Parameters
-    ----------
-    N : int
-        Upper bound on range (exclusive)
-    """
-    # Use the multiplicative property of the divisor count function
-    # exp[n] = exponent of prime_divisor[n] in n
-    divisor_counts = [1] * N
-    exp = [0] * N
-    prime_divisor = list(_prime_factor_range(N))
-    for n in range(2, N):
-        p = prime_divisor[n]
-        m = n // p
-        if prime_divisor[m] == p:
-            e = exp[m] + 1
-            exp[n], divisor_counts[n] = e, (divisor_counts[m] // e) * (e + 1)
-        else:
-            exp[n], divisor_counts[n] = 1, divisor_counts[m] * 2
-
-    return divisor_counts
-
-def divisor_function_range(N: int, k: int = 1) -> list[int]:
-    """
-    Find the values of the divisor function σ_k(n) for each n = 0, 1, 2, ..., N - 1,
-    where σ_k(n) = ∑_{d|n} d^k. Includes dummy value σ_k(0) = 0.
-
-    Parameters
-    ----------
-    N : int
-        Upper bound on range (exclusive)
-    """
-    if k == 0:
-        return divisor_count_range(N)
-    elif k < 0:
-        raise ValueError("k must be a non-negative integer.")
-
-    # Use the multiplicative property of the divisor sum function
-    # power[n] = p^(ke) for the largest prime power p^e | n,
-    # where p = prime_divisor[n]
-    # sum_of_powers[n] = 1 + p^k + p^(2k) + ... + p^(ke)
-    divisor_sums = [1] * N
-    power, sum_of_powers = [0] * N, [0] * N
-    prime_divisor = _prime_factor_range(N)
-    for n in range(2, N):
-        p = prime_divisor[n]
-        m = n // p
-        if prime_divisor[m] == p:
-            power[n] = power[m] * p**k
-            sum_of_powers[n] = sum_of_powers[m] + power[n]
-            divisor_sums[n] = divisor_sums[m] // sum_of_powers[m] * sum_of_powers[n]
-        else:
-            power[n] = p**k
-            sum_of_powers[n] = 1 + power[n]
-            divisor_sums[n] = divisor_sums[m] * sum_of_powers[n]
-
-    divisor_sums[0] = 0
-    return divisor_sums
-
-def aliquot_sum_range(N: int) -> list[int]:
-    """
-    Find the value of the aliquot sum s(n) for each n = 0, 1, 2, ..., N - 1,
-    where s(n) = σ(n) - n is the sum of proper divisors of n.
-    Includes dummy value s(0) = 0.
-
-    Parameters
-    ----------
-    N : int
-        Upper bound on range (exclusive)
-    """
-    divisor_sums = divisor_function_range(N)
-    return [d - i for i, d in enumerate(divisor_sums)]
-
 def radical(n: int) -> int:
     """
     Compute rad(n) as the product of the distinct prime factors of n.
@@ -1980,29 +1943,6 @@ def radical(n: int) -> int:
     if n < 1:
         raise ValueError("n must be a positive integer.")
     return prod(set(_gen_prime_factors(n)))
-
-def radical_range(N: int) -> list[int]:
-    """
-    Find the value of the radical function rad(n) for each n = 0, 1, 2, ..., N - 1,
-    where rad(n) is the product of the distinct prime factors of n.
-    Includes dummy value rad(0) = 1.
-
-    Parameters
-    ----------
-    N : int
-        Upper bound on range (exclusive)
-    """
-    rad = [1] * N
-    prime_divisor = _prime_factor_range(N)
-    for n in range(2, N):
-        p = prime_divisor[n]
-        m = n // p
-        if prime_divisor[m] == p:
-            rad[n] = rad[m]
-        else:
-            rad[n] = rad[m] * p
-
-    return rad
 
 def mobius(n: int) -> int:
     """
@@ -2032,28 +1972,6 @@ def mobius(n: int) -> int:
 
     return mu
 
-def mobius_range(N: int) -> list[int]:
-    """
-    Find the value of the Mobius function μ(n) for each n = 0, 1, 2, ..., N - 1.
-    Includes dummy value μ(0) = 1.
-
-    Parameters
-    ----------
-    N : int
-        Upper bound on range (exclusive)
-    """
-    mu = [1] * N
-    prime_divisor = _prime_factor_range(N)
-    for n in range(2, N):
-        p = prime_divisor[n]
-        m = n // p
-        if prime_divisor[m] == p:
-            mu[n] = 0
-        else:
-            mu[n] = -mu[m]
-
-    return mu
-
 def totient(n: int) -> int:
     """
     Compute Euler's totient function φ(n) for a positive integer n.
@@ -2069,30 +1987,6 @@ def totient(n: int) -> int:
     phi = n
     for p in set(_gen_prime_factors(n)):
         phi -= phi // p
-
-    return phi
-
-def totient_range(N: int) -> list[int]:
-    """
-    Find the value of Euler's totient function φ(n) for each n = 0, 1, 2, ..., N - 1.
-    Includes dummy value φ(0) = 1.
-
-    Parameters
-    ----------
-    N : int
-        Upper bound on range (exclusive)
-    """
-    phi = [1] * N
-    prime_divisor = _prime_factor_range(N)
-    for n in range(2, N):
-        if (p := prime_divisor[n]) == n:
-            phi[n] = n - 1  # n is prime
-        else:
-            m = n // p
-            if m % p == 0:
-                phi[n] = phi[m] * p  # φ(p^k) = p * φ(p^(k-1))
-            else:
-                phi[n] = phi[m] * (p - 1)  # φ(p * m) = (p - 1) * φ(m) if p ∤ m
 
     return phi
 
@@ -2116,6 +2010,67 @@ def carmichael(n: int) -> int:
             terms.append((p - 1) * (p**(e - 1)))
 
     return lcm(*terms)
+
+def multiplicative_range(f: Callable[..., int], N: int, f0: int = 1) -> list[int]:
+    """
+    Find the value of a multiplicative function f(n) for each n = 0, 1, 2, ..., N - 1.
+
+    Parameters
+    ----------
+    f : Callable(n) -> int or Callable(p, e) -> int
+        Function to compute values f(n) or f(p^e) at prime powers
+    N : int
+        Upper bound on range (exclusive)
+    f0 : int
+        Dummy value to include for f(0)
+    """
+    if N < 0:
+        raise ValueError("N must be non-negative")
+    if N == 0:
+        return []
+
+    # Select prime power function
+    mapping = {
+        divisor_count: lambda p, e: e + 1,
+        divisor_sum: lambda p, e: (p**(e + 1) - 1) // (p - 1),
+        radical: lambda p, e: p,
+        mobius: lambda p, e: -1 if e == 1 else 0,
+        totient: lambda p, e: (p - 1) * (p**(e - 1)),
+    }
+    if f in mapping:
+        f_prime_power = mapping[f]
+    else:
+        P = inspect.Parameter
+        params = [
+            p for p in inspect.signature(f).parameters.values()
+            if p.kind in (P.POSITIONAL_ONLY, P.POSITIONAL_OR_KEYWORD)
+        ]
+        if len(params) >= 2:
+            f_prime_power = f
+        else:
+            f_prime_power = lambda p, e: f(p**e)
+
+    # Use the multiplicative property
+    # prime_divisor[n] = p is the largest prime divisor of n < sqrt(N)
+    # prime_power[n] = p^e for the largest prime power p^e | n
+    # prime_exponent[n] = p-adic valuation of n (where p = prime_divisor[n])
+    prime_power = [1] * N
+    prime_exponent = [0] * N
+    prime_divisor = _prime_factor_range(N)
+    values = [f0] + [1] * (N - 1)
+    for n in range(2, N):
+        p = prime_divisor[n]
+        m = n // p
+        if prime_divisor[m] == p:
+            prime_exponent[n] = prime_exponent[m] + 1
+            prime_power[n] = prime_power[m] * p
+        else:
+            prime_exponent[n] = 1
+            prime_power[n] = p
+
+        values[n] = values[n // prime_power[n]] * f_prime_power(p, prime_exponent[n])
+
+    return values
 
 def _prime_factor_range(N: int) -> list[int]:
     """
