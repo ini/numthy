@@ -102,4 +102,4 @@ That's it.
 
 ## License
 
-[Free to use, copy, modify, and redistribute with attribution.](LICENSE.txt)
+[Free to use, copy, modify, and redistribute with attribution.](LICENSE.md)
