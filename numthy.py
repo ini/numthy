@@ -21,7 +21,7 @@ from functools import cache, lru_cache, partial, reduce
 from heapq import heappop, heappush
 from math import ceil, fsum, gcd, inf, isqrt, lcm, log, prod, sqrt
 from operator import mul, xor
-from typing import Any, Callable, Collection, Iterator, TypeAlias, TypeVar
+from typing import Callable, Collection, Iterator, TypeAlias, TypeVar
 
 
 
@@ -54,15 +54,16 @@ __all__ = [
     'polygonal', 'polygonal_index', 'polygonal_numbers', 'is_polygonal',
     'partition', 'partition_numbers', 'euler_transform',
     # Appendix
-    'integers', 'integer_pairs', 'nth', 'alternating',
-    'periodic_continued_fraction', 'convergents',
-    'permutation', 'polynomial', 'iroot', 'ilog',
-    'is_square', 'non_squares', 'squares', 'perfect_power', 'binary_search',
+    'integers', 'integer_pairs', 'alternating',
+    'periodic_continued_fraction', 'convergents', 'permutation', 'polynomial',
+    'iroot', 'ilog', 'is_square', 'perfect_power', 'binary_search',
 ]
 
 _NoSolutionError = type('_NoSolutionError', (Exception,), {})
+_PrecisionError = type('_PrecisionError', (Exception,), {})
 _T = TypeVar('T', bound='Number')
 Number: TypeAlias = int | float | complex | Fraction
+Real: TypeAlias = int | float | Fraction
 Vector: TypeAlias = list[_T]
 Matrix: TypeAlias = list[list[_T]]
 singleton = lru_cache(maxsize=1)
@@ -925,7 +926,7 @@ def prime_factorization(n: int) -> dict[int, int]:
 
 def divisors(n: int) -> tuple[int, ...]:
     """
-    Get all positive divisors of n in sorted order (including both 1 and n).
+    Get all positive divisors of n in sorted order.
 
     Parameters
     ----------
@@ -1537,12 +1538,12 @@ def _siqs(
     if not factor_base: return 1  # failure, no valid factor base
     min_relation_count = len(factor_base) + 30
     L = B * large_prime_bound_multiplier  # large prime bound
-    relations, lucky_factor = _collect_relations(
+    relations, factor = _collect_relations(
         n, factor_base, B, L, M, min_relation_count, max_polynomial_count)
 
     # Check early termination conditions
-    if lucky_factor is not None:
-        return lucky_factor  # success, one of the large primes was a factor
+    if factor is not None:
+        return factor  # success, one of the large primes was a factor
     if len(relations) < len(factor_base):
         return 1  # failure, null space will be trivial
 
@@ -1739,7 +1740,7 @@ def _collect_relations(
     -------
     relations : list[tuple[int, dict[int, int]]]
         List of (X, pf) tuples, where pf is the factorization of Q over the factor base
-    lucky_factor : int | None
+    factor : int | None
         A non-trivial factor of n if found during collection, otherwise None
     """
     factor_base_primes, _, _ = zip(*factor_base)
@@ -2154,16 +2155,15 @@ def crt(congruences: Iterable[tuple[int, int]]) -> int | None:
     Solve a system of linear congruences x ≡ aᵢ (mod nᵢ)
     via the Chinese Remainder Theorem.
 
+    Returns a solution to the system of congruences, mod the LCM of the moduli,
+    or None if no solution exists.
+
+    Supports non-coprime moduli.
+
     Parameters
     ----------
     congruences : Iterable[tuple[int, int]]
         Congruences as (residue, moduli) tuples
-
-    Returns
-    -------
-    x : int | None
-        Solution to the system of congruences, mod the LCM of the moduli,
-        or None if no solution exists
     """
     try:
         return reduce(_crt_two_congruences, congruences, (0, 1))[0]
@@ -2199,7 +2199,7 @@ def coprimes(n: int) -> Iterator[int]:
 
 def multiplicative_order(a: int, mod: int) -> int:
     """
-    Return the smallest integer k = ord_n(a) such that a^k ≡ 1 (mod n).
+    Compute ordₘ(a), the smallest positive integer such that a^k ≡ 1 (mod m).
 
     Parameters
     ----------
@@ -2212,6 +2212,7 @@ def multiplicative_order(a: int, mod: int) -> int:
     if gcd(a, mod) != 1:
         raise ValueError("Must have gcd(a, mod) = 1")
 
+    mod = abs(mod)
     order = carmichael(mod)
     for p, e in prime_factorization(order).items():
         for _ in range(e):
@@ -2355,6 +2356,8 @@ def dirichlet_character(m: int, k: int) -> Callable[[int], Number]:
     Return the Dirichlet character χₘ‚ₖ : ℤ → ℂ under Conrey labeling,
     where m is the modulus and k is an index such that gcd(m, k) = 1.
 
+    See: https://www.lmfdb.org/knowledge/show/character.dirichlet.conrey
+
     Parameters
     ----------
     m : int
@@ -2367,8 +2370,6 @@ def dirichlet_character(m: int, k: int) -> Callable[[int], Number]:
     chi : Callable(int) -> Number
         Dirichlet character χₘ‚ₖ(n) as a callable function
         returning the character value at n
-    
-    See: https://www.lmfdb.org/knowledge/show/character.dirichlet.conrey
     """
     m = abs(m)
     if gcd(m, k) != 1:
@@ -2507,14 +2508,14 @@ def _dirichlet_character_prime_power(p: int, e: int, k: int) -> Callable[[int], 
         # When q = 2^e > 4, (Z/qZ)× = C_2 × C_{2^{e-2}} = <-1> × <5>
         # Decompose k = ε_a * 5^a (mod q) where ε_a = ±1
         sign_a = -1 if k % 4 == 3 else 1
-        a = dlog(5, sign_a * k, q)
+        a = dlog(sign_a * k, 5, q)
 
         # Decompose n = ε_b * 5^b (mod q)
         # Character is χ(n) = exp(2πi * ((1-ε_a)(1-ε_b)/8 + ab/2^{e-2}))
         order = 2**(e - 2)
         def chi(n: int) -> Number:
             sign_b = -1 if n % 4 == 3 else 1
-            b = dlog(5, sign_b * n, q)
+            b = dlog(sign_b * n, 5, q)
             t = (a * b) % order
             return exp(2j * pi * ((1 - sign_a)*(1 - sign_b)/8 + t/order))
     else:
@@ -2533,21 +2534,21 @@ def _dirichlet_character_prime_power(p: int, e: int, k: int) -> Callable[[int], 
         if order % 4 == 0: exact[order // 4], exact[3 * order // 4] = 1j, -1j
 
         # Character is χ(n) = exp(2πi*ab/φ(q)), where g^a = k and g^b = n
-        a = dlog(g, k, q)
+        a = dlog(k, g, q)
         def chi(n: int) -> Number:
-            t = (a * dlog(g, n, q)) % order
+            t = (a * dlog(n, g, q)) % order
             return exact.get(t) or exp(2j * pi * t / order)
 
     return chi
 
 @small_cache
-def _dirichlet_log_table(a: int, mod: int) -> dict[int, int]:
+def _dirichlet_log_table(b: int, mod: int) -> dict[int, int]:
     """
-    Build a log-table of table[x] = b such that a^x = b (mod m).
+    Build a log-table of table[x] = a such that b^x = a (mod m).
     """
-    b, exp, powers = 1, 0, {1: 0}
-    while (b := (b * a) % mod) != 1:
-        powers[b] = (exp := exp + 1)
+    a, exp, powers = 1, 0, {1: 0}
+    while (a := (a * b) % mod) != 1:
+        powers[a] = (exp := exp + 1)
 
     return powers
 
@@ -2558,7 +2559,7 @@ def _dirichlet_log_cache(a: int, b: int, mod: int) -> int | None:
     """
     a, b = a % mod, b % mod
     if mod < 10000:
-        return _dirichlet_log_table(a, mod).get(b, None)
+        return _dirichlet_log_table(b, mod).get(a, None)
     else:
         return discrete_log(a, b, mod)
 
@@ -2638,7 +2639,7 @@ def hensel(
 
 def discrete_log(a: int, b: int, mod: int) -> int | None:
     """
-    Find the smallest non-negative integer x such that a^x ≡ b (mod m).
+    Find the smallest non-negative integer x such that b^x ≡ a (mod m).
 
     Uses the Pohlig-Hellman algorithm, with either baby-step giant-step or
     Pollard's rho for discrete logarithms on the prime-order sub-problems.
@@ -2646,9 +2647,9 @@ def discrete_log(a: int, b: int, mod: int) -> int | None:
     Parameters
     ----------
     a : int
-        Base of logarithm
-    b : int
         Target integer
+    b : int
+        Base of logarithm
     mod : int
         Modulus
     """
@@ -2656,32 +2657,32 @@ def discrete_log(a: int, b: int, mod: int) -> int | None:
     a, b = a % mod, b % mod
 
     # Handle edge cases
-    if b == 1 or mod == 1:
+    if a == 1 or mod == 1:
         return 0
 
-    # Extended reduction to get gcd(a, m) = 1
-    # Solving a^x = b * normalization^(-1) (mod m) gives us a^(x + offset) = b (mod m)
+    # Extended reduction to get gcd(b, m) = 1
+    # Solving b^x = a * normalization^(-1) (mod m) gives us b^(x + offset) = a (mod m)
     offset, normalization = 0, 1
-    while (g := gcd(a, mod)) != 1:
-        if b == normalization:
+    while (g := gcd(b, mod)) != 1:
+        if a == normalization:
             return offset
-        if b % g != 0:
+        if a % g != 0:
             return None  # no solution exists
 
-        b, mod, offset = b // g, mod // g, offset + 1
+        a, mod, offset = a // g, mod // g, offset + 1
         if mod == 1:
             return offset
 
-        a, normalization = a % mod, (normalization * (a // g)) % mod
+        b, normalization = b % mod, (normalization * (b // g)) % mod
 
     # Check early termination conditions
-    b = (b * pow(normalization, -1, mod)) % mod  # normalize
-    if b == 0:
-        return None  # no solution exists for a^x = 0 mod m
-    if b == 1:
+    a = (a * pow(normalization, -1, mod)) % mod  # normalize
+    if a == 0:
+        return None  # no solution exists for b^x = 0 mod m
+    if a == 1:
         return offset
 
-    # Solve a^x ≡ b (mod p^e) for each prime power
+    # Solve b^x ≡ a (mod p^e) for each prime power
     congruences = []
     for p, e in prime_factorization(mod).items():
         try:
@@ -2738,52 +2739,52 @@ def modular_roots(n: int, k: int, mod: int) -> tuple[int, ...]:
 
 def _discrete_log_mod_prime_power(a: int, b: int, p: int, e: int) -> tuple[int, int]:
     """
-    Solve a^x ≡ b (mod q) in the unit group (Z/qZ)×, where q = p^e.
-    Returns both the discrete log x and ord_q(a).
+    Solve b^x ≡ a (mod q) in the unit group (Z/qZ)×, where q = p^e.
+    Returns both the discrete log x and ord_q(b).
     """
     q = p**e
     a, b = a % q, b % q
 
-    # Solve a^x = b in (Z/qZ)× = C_2 × C_{2^{e-2}} = <-1> × <5>
+    # Solve b^x = a in (Z/qZ)× = C_2 × C_{2^{e-2}} = <-1> × <5>
     if p == 2 and e >= 3:
         # Represent a, b each as (-1)^s * 5^t
         s_a = 0 if a % 4 == 1 else 1
         s_b = 0 if b % 4 == 1 else 1
-        t_a = _pohlig_hellman_prime_power(5, -a % q if s_a == 1 else a, q, 2, e - 2)
-        t_b = _pohlig_hellman_prime_power(5, -b % q if s_b == 1 else b, q, 2, e - 2)
+        t_a = _pohlig_hellman_prime_power(-a % q if s_a == 1 else a, 5, q, 2, e - 2)
+        t_b = _pohlig_hellman_prime_power(-b % q if s_b == 1 else b, 5, q, 2, e - 2)
 
-        # Check 5^(t_b) in <5^(t_a)> to determine if a solution exists
+        # Check 5^(t_a) in <5^(t_b)> to determine if a solution exists
         ord_5 = 2**(e - 2)  # size of <5> in (Z/qZ)×
-        g = gcd(t_a, ord_5)  # index of <5^{t_a}> inside <5>
-        if t_b % g != 0:
-            raise _NoSolutionError("No solution exists")  # 5^(t_b) not in <5^(t_a)>
+        g = gcd(t_b, ord_5)  # index of <5^{t_b}> inside <5>
+        if t_a % g != 0:
+            raise _NoSolutionError("No solution exists")  # 5^(t_a) not in <5^(t_b)>
 
-        ord_a = ord_5 // g  # size of the subgroup <5^{t_a}>
+        ord_b = ord_5 // g  # size of the subgroup <5^{t_b}>
 
-        # Handle the degenerate a = ± 1 case (trivial 5-part)
-        if ord_a == 1:
-            if s_a == 0 and s_b != 0:
+        # Handle the degenerate b = ± 1 case (trivial 5-part)
+        if ord_b == 1:
+            if s_a != 0 and s_b == 0:
                 raise _NoSolutionError("No solution exists")
-            return (0, 1) if s_a == 0 else (s_b, 2)
+            return (0, 1) if s_b == 0 else (s_a, 2)
 
-        # Solve (t_a/g) * x ≡ (t_b/g) (mod ord_a) in <5>
-        inv = pow((t_a // g) % ord_a, -1, ord_a)
-        x = ((t_b // g) * inv) % ord_a
+        # Solve (t_b/g) * x ≡ (t_a/g) (mod ord_b) in <5>
+        inv = pow((t_b // g) % ord_b, -1, ord_b)
+        x = ((t_a // g) * inv) % ord_b
 
         # Enforce sign parity constraint (-1)^{s_a*x} = (-1)^{s_b}
-        if (s_a == 0 and s_b != 0) or (s_a == 1 and (x % 2) != s_b):
+        if (s_b == 0 and s_a != 0) or (s_b == 1 and (x % 2) != s_a):
             raise _NoSolutionError("No solution exists")
 
-        return x, ord_a
+        return x, ord_b
 
-    # Solve a^x = b in the cyclic subgroup <a> ≤ (Z/qZ)×
-    ord_a = _multiplicative_order_mod_odd_prime_power(a, p, e)
-    if pow(b, ord_a, q) != 1:
-        raise _NoSolutionError("No solution exists")  # b is not in <a>
+    # Solve b^x = a in the cyclic subgroup <b> ≤ (Z/qZ)×
+    ord_b = _multiplicative_order_mod_odd_prime_power(b, p, e)
+    if pow(a, ord_b, q) != 1:
+        raise _NoSolutionError("No solution exists")  # a is not in <b>
 
-    return _pohlig_hellman(a, b, q, ord_a), ord_a
+    return _pohlig_hellman(a, b, q, ord_b), ord_b
 
-def _pohlig_hellman(g: int, h: int, mod: int, order: int) -> int:
+def _pohlig_hellman(h: int, g: int, mod: int, order: int) -> int:
     """
     Pohlig-Hellman algorithm for discrete logarithms.
     Solves g^x = h in the cyclic subgroup <g> of size `order`.
@@ -2811,13 +2812,13 @@ def _pohlig_hellman(g: int, h: int, mod: int, order: int) -> int:
         q = p**e
         g_i = pow(g, order // q, mod)  # ord(g_i) = q in a cyclic group
         h_i = pow(h, order // q, mod)
-        x_i = _pohlig_hellman_prime_power(g_i, h_i, mod, p, e)
+        x_i = _pohlig_hellman_prime_power(h_i, g_i, mod, p, e)
         congruences.append((x_i, q))
 
     # Combine solutions via Chinese Remainder Theorem
     return crt(congruences) % order
 
-def _pohlig_hellman_prime_power(g: int, h: int, mod: int, p: int, e: int) -> int:
+def _pohlig_hellman_prime_power(h: int, g: int, mod: int, p: int, e: int) -> int:
     """
     Pohlig-Hellman algorithm for discrete logarithms.
     Solves the discrete logarithm g^x = h in cyclic subgroup <g> of order p^e.
@@ -2830,7 +2831,7 @@ def _pohlig_hellman_prime_power(g: int, h: int, mod: int, p: int, e: int) -> int
     discrete_log_solver = _pollard_rho_log if p.bit_length() > 32 else _bsgs
     g, h = g % mod, h % mod
     if e == 1:
-        return discrete_log_solver(g, h, mod, p)
+        return discrete_log_solver(h, g, mod, p)
 
     # Find an element with order p
     gamma = pow(g, p**(e - 1), mod)
@@ -2841,7 +2842,7 @@ def _pohlig_hellman_prime_power(g: int, h: int, mod: int, p: int, e: int) -> int
     for i in range(e):
         exponent //= p  # p^(e - 1 - i)
         projected_target = pow(current_target, exponent, mod)
-        digit = discrete_log_solver(gamma, projected_target, mod, p)
+        digit = discrete_log_solver(projected_target, gamma, mod, p)
         x += digit * prime_power
         current_target *= pow(g, (-digit * prime_power) % q, mod)  # h * g^(-x)
         current_target %= mod
@@ -2849,7 +2850,7 @@ def _pohlig_hellman_prime_power(g: int, h: int, mod: int, p: int, e: int) -> int
 
     return x % q
 
-def _bsgs(g: int, h: int, mod: int, p: int) -> int:
+def _bsgs(h: int, g: int, mod: int, p: int) -> int:
     """
     Baby-step giant-step algorithm for discrete logarithms.
     Solves the discrete logarithm g^x = h in cyclic group <g> of prime order p.
@@ -2887,7 +2888,7 @@ def _bsgs_table(g: int, mod: int, p: int) -> tuple[dict[int, int], int, int]:
     g_m_inv = pow(pow(g, m, mod), -1, mod)
     return table, m, g_m_inv
 
-def _pollard_rho_log(g: int, h: int, mod: int, p: int, partition_size: int = 32) -> int:
+def _pollard_rho_log(h: int, g: int, mod: int, p: int, partition_size: int = 32) -> int:
     """
     Pollard Rho algorithm for discrete logarithms.
     Finds x such that g^x ≡ h (mod m), where p is the order of g.
@@ -3119,7 +3120,7 @@ def _adleman_manders_miller(delta: int, r: int, p: int) -> int:
     # and (δ^α * h)^r = δ * b^(r^(t-i)) (mod p)
     for i in range(1, t):
         d = pow(b, r**(t - 1 - i), p)
-        j = -discrete_log(a, d, p) % r
+        j = -discrete_log(d, a, p) % r
         h = (h * pow(c, j, p)) % p
         c = pow(c, r, p)
         b = (b * pow(c, j, p)) % p
@@ -3573,7 +3574,7 @@ def pillai(a: int, b: int, c: int) -> Iterator[tuple[int, int]]:
             for i, p in enumerate(sieve_primes):
                 target_mod_p = (c_mod[i] + b_pow_y_mod[i]) % p
                 if target_mod_p == 0: break
-                x_mod_order = discrete_log(a_mod[i], target_mod_p, p)
+                x_mod_order = discrete_log(target_mod_p, a_mod[i], p)
                 if x_mod_order is None: break
                 congruences.append((x_mod_order % orders[i], orders[i]))
             else:
@@ -4002,7 +4003,7 @@ def integer_solve(
     particular = [sum(V[i][j] * y[j] for j in range(num_cols)) for i in range(num_cols)]
     return (particular, nullspace)
 
-def lll_reduce(B: Matrix[int], delta: float = 0.75) -> Matrix[int]:
+def lll_reduce(B: Matrix[int]) -> Matrix[int]:
     """
     Lenstra-Lenstra-Lovász (LLL) lattice basis reduction.
 
@@ -4010,15 +4011,15 @@ def lll_reduce(B: Matrix[int], delta: float = 0.75) -> Matrix[int]:
     where |b₁| ≤ 2^((n-1)/2) * λ₁(L) and the Lovász condition holds:
     δ‖b*_k‖² ≤ ‖b*_{k+1}‖² + μ_{k+1,k}² ‖b*_k‖².
 
+    Uses floating-point arithmetic for speed, with automatic escalation
+    to exact rational arithmetic if precision issues are detected.
+
     See: https://www.cs.cmu.edu/~avrim/451f11/lectures/lect1129_LLL.pdf
 
     Parameters
     ----------
     B : Matrix[int]
         Integer matrix whose rows form a lattice basis
-    delta : float
-        Lovasz parameter (must satisfy 0.25 < delta < 1).
-        Higher values give better reduction but slower runtime.
 
     Complexity
     ----------
@@ -4026,17 +4027,15 @@ def lll_reduce(B: Matrix[int], delta: float = 0.75) -> Matrix[int]:
     """
     if not B:
         return []
-    if not (0.25 < delta < 1):
-        raise ValueError("delta must satisfy 0.25 < delta < 1")
 
-    B = [list(row) for row in B]
-    return _lll_reduce_block(B, 0, len(B), delta)
+    try:
+        return _lll_reduce_block([list(row) for row in B], 0, len(B), 0.99, exact=False)
+    except (_PrecisionError, OverflowError, ValueError):
+        return _lll_reduce_block([list(row) for row in B], 0, len(B), 0.75, exact=True)
 
 def bkz_reduce(
     B: Matrix[int],
     block_size: int = 20,
-    delta: float = 0.99,
-    max_tours: int | None = None,
     pruning: float = 1.0,
 ) -> Matrix[int]:
     """
@@ -4057,24 +4056,18 @@ def bkz_reduce(
     block_size : int
         Block size β for BKZ reduction.
         Larger values give better reduction but exponentially slower runtime.
-    delta : float
-        LLL parameter for local reduction (default 0.99). Must satisfy 0.25 < delta < 1.
-    max_tours : int, optional
-        Maximum number of BKZ tours. If None, runs until no improvement.
     pruning : float
         Pruning parameter in (0, 1]. Lower values prune more aggressively,
         speeding up enumeration but potentially missing the shortest vector.
 
     Complexity
     ----------
-    O(β^β) per block, or O(2^(0.25β²)) with pruning. O(n²) tours typical.
+    O(β^β) per block, or O(2^(0.25β²)) with pruning. 2-5 tours typical.
     """
     if not B:
         return []
     if block_size < 2:
         raise ValueError("block_size must be at least 2")
-    if not (0.25 < delta < 1):
-        raise ValueError("delta must satisfy 0.25 < delta < 1")
     if not (0 < pruning <= 1):
         raise ValueError("pruning must be in (0, 1]")
 
@@ -4084,14 +4077,12 @@ def bkz_reduce(
         return B
 
     # Start with LLL reduction
-    B = lll_reduce(B, delta)
+    B = lll_reduce(B)
     block_size = min(block_size, n)
     if block_size <= 2:
         return B  # BKZ-2 is equivalent to LLL
 
-    tour = 0
-    while max_tours is None or tour < max_tours:
-        tour += 1
+    while True:
         improved = False
 
         # Full size reduction at tour start
@@ -4132,7 +4123,10 @@ def bkz_reduce(
                     B.insert(k, v)
 
                     # LLL reduce the block [k, j+1) and remove linear dependency
-                    B = _lll_reduce_block(B, k, j + 1, delta)
+                    try:
+                        _lll_reduce_block(B, k, j + 1, 0.99, exact=False)
+                    except (_PrecisionError, OverflowError, ValueError):
+                        _lll_reduce_block(B, k, j + 1, 0.75, exact=True)
 
                     # Remove the dependent vector (now at position j)
                     _, _, bstar_sq_new = _gso(B)
@@ -4157,7 +4151,7 @@ def bkz_reduce(
             break
 
     # Final LLL pass
-    return lll_reduce(B, delta)
+    return lll_reduce(B)
 
 def babai_closest_vector(B: Matrix[int], target: Vector[int]) -> Vector[int]:
     """
@@ -4173,11 +4167,6 @@ def babai_closest_vector(B: Matrix[int], target: Vector[int]) -> Vector[int]:
     target : Vector
         Target vector in ambient space
 
-    Returns
-    -------
-    Vector
-        Approximate closest lattice vector to target.
-
     Complexity
     ----------
     O(n²d) time, O(n² + nd) space for n × d matrix (n vectors of dimension d)
@@ -4185,26 +4174,28 @@ def babai_closest_vector(B: Matrix[int], target: Vector[int]) -> Vector[int]:
     if not B:
         return [0] * len(target)
 
-    k = len(B)
-    n = len(B[0])
-    if len(target) != n:
+    # Validate inputs
+    n, dim = len(B), len(B[0])
+    if len(target) != dim:
         raise ValueError("Dimension mismatch")
 
-    _, bstar, bstar_sq = _gso(B)
+    # Compute Gram-Schmidt orthogonalization
+    _, bstar, bstar_squared_norm = _gso(B)
     y = [float(x) for x in target]
-    coeffs = [0] * k
+    coeffs = [0] * n
 
-    for i in range(k - 1, -1, -1):
-        if bstar_sq[i] == 0:
-            continue
-        c = _nearest_int(_dot(y, bstar[i]) / bstar_sq[i])
-        coeffs[i] = c
-        y = [y[t] - c * B[i][t] for t in range(n)]
+    # Project target onto each orthogonal component and round to nearest integer
+    for i in reversed(range(n)):
+        if bstar_squared_norm[i] > 0:
+            c = coeffs[i] = _nearest_int(_dot(y, bstar[i]) / bstar_squared_norm[i])
+            y = [y_i - c * b_i for y_i, b_i in zip(y, B[i])]
 
-    v = [0] * n
-    for c, bi in zip(coeffs, B):
-        if c:
-            v = [vi + c * bij for vi, bij in zip(v, bi)]
+    # Reconstruct lattice vector from integer coefficients
+    v = [0] * dim
+    for c, b_i in zip(coeffs, B):
+        if c != 0:
+            v = [v_i + c * b_ij for v_i, b_ij in zip(v, b_i)]
+
     return v
 
 def coppersmith(
@@ -4233,21 +4224,16 @@ def coppersmith(
         f(x) = a₀ + a₁x + a₂x² + ...
     mod : int
         Modulus
-    X : int, optional
+    X : int
         Bound on root size (|x| < X).
         If None, uses theoretical bound X ≈ M^(1/d - epsilon), where M is the modulus
-    epsilon : float, optional
+    epsilon : float
         Parameter controlling lattice dimension vs root bound trade-off.
         Smaller epsilon allows larger X but requires larger lattice. Default: 0.05.
-    m : int, optional
+    m : int
         Lattice parameter controlling the number of polynomial shifts. If None,
         computed from epsilon as m = ceil(1 / (d * epsilon)).
         Larger m gives better success probability but slower runtime.
-
-    Returns
-    -------
-    tuple[int, ...]
-        All small integer roots x with |x| < X satisfying f(x) ≡ 0 (mod M).
 
     Complexity
     ----------
@@ -4259,98 +4245,73 @@ def coppersmith(
     if epsilon <= 0:
         raise ValueError("Must have epsilon > 0")
 
+    # Remove leading zeros
     coefficients = list(coefficients)
-    if not coefficients:
-        return ()
-
-    # Remove leading zeros and find degree
     while len(coefficients) > 1 and coefficients[-1] == 0:
         coefficients.pop()
 
+    # Get polynomial degree
     d = len(coefficients) - 1
-    if d == 0:
+    if d <= 0:
         return ()
 
     # Make polynomial monic by scaling
-    lead = coefficients[-1]
-    if lead != 1:
+    if (lead := coefficients[-1]) != 1:
         if gcd(lead, M) != 1:
             raise ValueError("Leading coefficient must be coprime to modulus")
         lead_inv = pow(lead, -1, M)
         coefficients = [(c * lead_inv) % M for c in coefficients]
-        coefficients[-1] = 1
 
-    # Compute m (number of x-shifts per power of f)
+    # Adjust hyperparameters
     epsilon = min(epsilon, 1/d)
     if m is None:
         m = max(1, ceil(1 / (d * epsilon)))
 
-    # Set default bound X < M^(1/d - epsilon) based on Coppersmith's theorem
+    # Set default bound X = M^(1/d - epsilon)
     if X is None:
         eps = Fraction(epsilon).limit_denominator(1000)
-        X = iroot(pow(M, eps.denominator - eps.numerator * d), eps.denominator * d)
-    if X <= 0:
-        X = 1
+        num = eps.denominator - eps.numerator * d
+        den = eps.denominator * d
+        X = max(1, iroot(pow(M, num), den))
+    else:
+        X = max(X, 1)
 
     # Build the lattice basis using Howgrave-Graham's construction
-    # Rows correspond to g_{i,j}(xX) where g_{i,j}(x) = M^(m-i) * x^j * f(x)^i
-    # for i = 0 ... m - 1, j = 0 ... d - 1
+    # Each row corresponds to a polynomial g_{i,j}(x * X)
+    # where g_{i,j}(x) = M^(m-i) * x^j * f(x)^i for i = 0 ... m - 1, j = 0 ... d - 1
     # Each polynomial g has degree at most i*d + j < m*d = n
     n = d * m  # lattice dimension
     B = [[0] * n for _ in range(n)]
 
     # Precompute powers of f(x) mod x^n
-    # f_powers[i][k] = coefficient of x^k in f(x)^i
-    f_powers: list[list[int]] = [[0] * n for _ in range(m + 1)]
-    f_powers[0][0] = 1  # f^0 = 1
+    # where f_powers[i][k] = coefficient of x^k in f(x)^i
+    f_powers = [[0] * n for _ in range(m + 1)]
+    f_powers[0][0] = 1
     for i in range(1, m + 1):
-        # f_powers[i] = f_powers[i-1] * f, keeping coefficients mod x^n
         for j in range(min(n, (i - 1) * d + 1)):
-            if f_powers[i - 1][j] == 0:
-                continue
-            for k in range(d + 1):
-                if j + k < n:
-                    f_powers[i][j + k] += f_powers[i - 1][j] * coefficients[k]
+            if f_powers[i - 1][j] == 0: continue
+            for k in range(min(d + 1, n - j)):
+                f_powers[i][j + k] += f_powers[i - 1][j] * coefficients[k]
 
-    # Fill lattice rows: g_{i,j}(xX) = M^(m-i) * x^j * f(x)^i evaluated at xX
-    # The vector for g(x) = sum_k g_k x^k is [g_0, g_1*X, g_2*X^2, ..., g_{n-1}*X^{n-1}]
-    row_idx = 0
+    # Build a lattice of polynomials that all vanish mod M^m at roots of f
+    # Row (i*d + j) of B encodes x^j * f^i * M^(m-i), scaled by X^k at position k
+    M_power = pow(M, m)
+    X_powers = [X**i for i in range(n)]
     for i in range(m):
-        N_power = pow(M, m - i)
         for j in range(d):
-            # g_{i,j}(x) = M^(m-i) * x^j * f(x)^i
-            # Coefficient of x^k in g_{i,j} is M^(m-i) * [coeff of x^(k-j) in f^i]
-            X_power = 1
-            for k in range(n):
-                if k >= j and k - j < len(f_powers[i]):
-                    B[row_idx][k] = f_powers[i][k - j] * N_power * X_power
-                X_power *= X
-            row_idx += 1
+            for k in range(j, n):
+                B[i*d + j][k] = M_power * X_powers[k] * f_powers[i][k - j]
 
-    # LLL reduce
-    B_reduced = lll_reduce(B)
+        M_power //= M
 
     # Extract polynomials from short vectors and find their integer roots
-    # By Howgrave-Graham's lemma, if h(x) has small coefficients (from LLL)
+    # By Howgrave-Graham's lemma, if h(x) has small coefficients (i.e. from LLL)
     # and h(x0) = 0 (mod M^m) with |x0| < X, then h(x0) = 0 over the integers
     f, roots = polynomial(coefficients), set()
-    for row in B_reduced:
-        # Skip zero rows
-        if all(v == 0 for v in row):
-            continue
-
+    for row in lll_reduce(B):
         # Reconstruct polynomial h(x) from vector [h_0, h_1*X, h_2*X^2, ...]
-        h = []
-        X_power = 1
-        valid = True
-        for k in range(n):
-            if row[k] % X_power != 0:
-                valid = False
-                break
-            h.append(row[k] // X_power)
-            X_power *= X
-
-        if not valid or all(c == 0 for c in h):
+        h, remainders = zip(*[divmod(row[k], X_powers[k]) for k in range(n)])
+        if any(remainders) or not any(h):
             continue
 
         # Find integer roots of h(x) using rational root theorem
@@ -4490,51 +4451,76 @@ def _smith_normal_form(A: Matrix[int]) -> tuple[Matrix[int], Matrix[int], Matrix
 
 def _gso(
     B: Matrix[int],
+    start: int = 0,
+    stop: int | None = None,
+    mu: Matrix[Real] | None = None,
+    bstar: Matrix[Real] | None = None,
+    bstar_squared_norm: Vector[Real] | None = None,
     tolerance: float = 1e-12,
     max_passes: int = 10,
-) -> tuple[Matrix[float], Matrix[float], Vector[float]]:
+    exact: bool = False,
+) -> tuple[Matrix[Real], Matrix[Real], Vector[Real]]:
     """
     Modified Gram-Schmidt orthogonalization with adaptive re-orthogonalization.
 
     Returns (mu, bstar, bstar_squared_norm) where mu[i][j] are the GSO coefficients,
     bstar[i] is the i-th orthogonalized vector, and bstar_squared_norm[i] is ||b*ᵢ||².
 
+    When mu/bstar/bstar_squared_norm are provided, performs partial recomputation
+    for rows [start, stop) and updates mu[i][j] for i >= stop, j in [start, stop).
+
     Complexity
     ----------
-    O(n²d) time, O(n² + nd) space for n × d matrix (n vectors of dimension d)
+    O(n²d) time, O(n² + nd) space for full computation (n × d matrix)
+    O((stop - start) · nd) time for partial recomputation
     """
     n, dim = len(B), len(B[0])
     if n == 0:
         return [], [], []
 
-    # Initialize coefficients
-    mu = [[float(i == j) for j in range(n)] for i in range(n)]
-    bstar = [[0.0] * dim for _ in range(n)]
-    bstar_squared_norm = [0.0] * n
+    stop = n if stop is None else stop
+    max_passes = max_passes if mu is None else 1
+    zero, one = (Fraction(0), Fraction(1)) if exact else (0.0, 1.0)
+    number_type = Fraction if exact else float
+
+    # Initialize or reuse coefficients
+    if mu is None or bstar is None or bstar_squared_norm is None:
+        mu = [[one if i == j else zero for j in range(n)] for i in range(n)]
+        bstar = [[zero] * dim for _ in range(n)]
+        bstar_squared_norm = [zero] * n
 
     # Modified Gram-Schmidt with adaptive re-orthogonalization
-    for i in range(n):
-        v = [float(x) for x in B[i]]
+    for i in range(start, stop):
+        mu[i][:i] = [zero] * i
+        v = [number_type(x) for x in B[i]]
         for _ in range(max_passes):
-            max_projection = 0.0
+            max_projection = zero
             for j in range(i):
                 if bstar_squared_norm[j] != 0:
-                    projection = _dot(v, bstar[j]) / bstar_squared_norm[j]
+                    projection = _dot(v, bstar[j], exact) / bstar_squared_norm[j]
                     max_projection = max(max_projection, abs(projection))
                     mu[i][j] += projection
                     v = [v[t] - projection * bstar[j][t] for t in range(dim)]
+
             if max_projection < tolerance:
                 break
 
-        bstar[i], bstar_squared_norm[i] = v, _dot(v, v)
+        bstar[i], bstar_squared_norm[i] = v, _dot(v, v, exact)
 
-    return mu, bstar, bstar_squared_norm,
+    # Update coefficients mu_{i,j} for i >= stop, j in [start, stop)
+    for i in range(stop, n):
+        for j in range(start, stop):
+            if bstar_squared_norm[j] != 0:
+                mu[i][j] = _dot(B[i], bstar[j], exact) / bstar_squared_norm[j]
+
+    return mu, bstar, bstar_squared_norm
 
 def _lll_reduce_block(
     B: Matrix[int],
     start: int,
     stop: int,
-    delta: float,
+    delta: float = 0.99,
+    exact: bool = False,
 ) -> Matrix[int]:
     """
     LLL-reduce a contiguous block of the basis B[start:stop] in place.
@@ -4544,35 +4530,75 @@ def _lll_reduce_block(
     if stop - start <= 1:
         return B
 
+    number_type = Fraction if exact else float
+    delta = Fraction(delta).limit_denominator(1000) if exact else delta
+    max_size_reduction_iterations = n * n * 100  # Generous bound for size reduction
+
     # Initial Gram-Schmidt orthogonalization
-    mu, bstar, bstar_squared_norm = _gso(B)
+    mu, bstar, bstar_squared_norm = _gso(B, exact=exact)
 
     # LLL reduction
     i = start + 1
     while i < stop:
         # Size reduction to make |μ_{i,j}| <= 0.5 for all j < i
-        for j in range(i - 1, start - 1, -1):
-            if (c := _nearest_int(mu[i][j])) != 0:
-                B[i] = [x - c * y for x, y in zip(B[i], B[j])]
-                for k in range(j + 1):
-                    mu[i][k] -= c * mu[j][k]
+        size_reduction_iterations = 0
+        while any(abs(mu[i][j]) > 0.5 for j in range(start, i)):
+            # Check for precision errors
+            size_reduction_iterations += 1
+            if not exact and size_reduction_iterations > max_size_reduction_iterations:
+                raise _PrecisionError("Size reduction failed to converge")
 
-        # Recompute bstar[i] after size reduction
-        bstar[i] = list(B[i])
+            for j in range(i - 1, start - 1, -1):
+                if (c := _nearest_int(mu[i][j])) != 0:
+                    # Update basis vector
+                    B[i] = [x - c * y for x, y in zip(B[i], B[j])]
+
+                    # Incremental μ_{i,k} update for k <= j
+                    for k in range(j + 1):
+                        mu[i][k] -= c * mu[j][k]
+
+        # Recompute bstar[i] and mu[i] after size reduction
+        bstar[i] = [number_type(x) for x in B[i]]
         for j in range(i):
-            bstar[i] = [bstar[i][t] - mu[i][j] * bstar[j][t] for t in range(dim)]
+            if bstar_squared_norm[j] != 0:
+                mu[i][j] = _dot(B[i], bstar[j], exact) / bstar_squared_norm[j]
+                bstar[i] = [bstar[i][t] - mu[i][j] * bstar[j][t] for t in range(dim)]
 
-        # Check Lovász condition and swap/backtrack if violated
-        bstar_squared_norm[i] = _dot(bstar[i], bstar[i])
-        if bstar_squared_norm[i] != 0:  # skip zero vectors
+        # Recompute bstar_squared_norm[i] after size reduction
+        bstar_squared_norm[i] = _dot(bstar[i], bstar[i], exact)
+
+        # Precision failure detection (only in float mode)
+        if not exact:
+            if bstar_squared_norm[i] < 0:
+                raise _PrecisionError("Negative squared norm detected")
+            if any(abs(mu[i][j]) > 0.5 + 1e-9 for j in range(start, i)):
+                raise _PrecisionError("Size reduction verification failed")
+
+        # Check Lovász condition (any(B[i]) skips zero vectors)
+        if bstar_squared_norm[i - 1] != 0 and any(B[i]):
             threshold = (delta - mu[i][i - 1]**2) * bstar_squared_norm[i - 1]
             if bstar_squared_norm[i] < threshold:
-                B[i], B[i - 1] = B[i - 1], B[i]  # swap basis vectors
-                mu, bstar, bstar_squared_norm = _gso(B)  # recompute after swap
-                i = max(i - 1, start + 1)  # backtrack
+                B[i], B[i - 1] = B[i - 1], B[i]
+                _gso(B, i - 1, i + 1, mu, bstar, bstar_squared_norm, exact=exact)
+                i = max(i - 1, start + 1)
                 continue
 
         i += 1
+
+    # Verify with exact arithmetic if any float μ values are close to 0.5
+    if not exact:
+        borderline = any(
+            abs(mu[i][j]) > 0.5 - 1e-9
+            for i in range(1, stop) for j in range(start, i)
+        )
+        if borderline:
+            mu_exact, _, _ = _gso(B, exact=True)
+            for i in range(1, stop):
+                if any(abs(mu_exact[i][j]) > Fraction(1, 2) for j in range(start, i)):
+                    raise _PrecisionError("Final verification failed: |μ| > 0.5")
+
+    # Pack zero vectors to the front of the reduced block
+    B[start:stop] = sorted(B[start:stop], key=any)
 
     return B
 
@@ -4668,7 +4694,7 @@ def _integer_polynomial_roots(coefficients: list[int]) -> Iterator[int]:
     """
     Find all integer roots of a polynomial with integer coefficients.
     """
-    if not coefficients or all(c == 0 for c in coefficients):
+    if all(c == 0 for c in coefficients):
         return
 
     # Remove leading zeros
@@ -4687,10 +4713,12 @@ def _integer_polynomial_roots(coefficients: list[int]) -> Iterator[int]:
     f = polynomial(coefficients)
     yield from (x for d in divisors(coefficients[0]) for x in (d, -d) if f(x) == 0)
 
-def _dot(left: Vector[float], right: Vector[float]) -> float:
+def _dot(left, right, exact: bool = False):
     """
     Compute the dot product of two vectors.
     """
+    if exact:
+        return sum((x * y for x, y in zip(left, right)), Fraction(0))
     return fsum(x * y for x, y in zip(left, right))
 
 def _row_add(matrices: Iterable[Matrix], i: int, k: int, t: int):
@@ -4715,6 +4743,13 @@ def _row_scale(matrices: Iterable[Matrix], i: int, s: int):
     for X in matrices:
         X[i] = [s * v for v in X[i]]
 
+def _swap_rows(matrices: Iterable[Matrix], i: int, j: int):
+    """
+    Swap rows i and j.
+    """
+    for X in matrices:
+        X[i], X[j] = X[j], X[i]
+
 def _swap_cols(matrices: Iterable[Matrix], j: int, k: int):
     """
     Swap columns j and k.
@@ -4727,7 +4762,8 @@ def _nearest_int(q: int | float | Fraction) -> int:
     """
     Round to nearest integer, ties away from zero.
     """
-    return int(q + 0.5) if q >= 0 else -int(-q + 0.5)
+    one_half = 0.5 if isinstance(q, float) else Fraction(1, 2)
+    return int(q + one_half) if q >= 0 else -int(-q + one_half)
 
 
 
@@ -4773,7 +4809,7 @@ def lucas(n: int, P: int = 1, Q: int = -1, mod: int | None = None) -> int:
         raise ValueError(f"Must have gcd(Q, mod) = 1 for n < 0")
     elif n < 0:
         U = lucas(-n, P, Q, mod)
-        if mod:
+        if mod is not None:
             return (-U * pow(Q, n, mod)) % mod
         else:
             divisor = Q**(-n)
@@ -4783,7 +4819,7 @@ def lucas(n: int, P: int = 1, Q: int = -1, mod: int | None = None) -> int:
     elif n == 0:
         return 0
     elif n == 1:
-        return 1 % mod if mod else 1
+        return 1 if mod is None else 1 % mod
 
     # Fast doubling via binary representation
     U_k, U_k_minus_1 = 1, 0
@@ -4793,20 +4829,20 @@ def lucas(n: int, P: int = 1, Q: int = -1, mod: int | None = None) -> int:
         U_k_plus_1 = P*U_k - Q*U_k_minus_1
         U_2k = U_k * (2*U_k_plus_1 - P*U_k)
         U_2k_minus_1 = U_k*U_k - Q*U_k_minus_1*U_k_minus_1
-        if mod:
+        if mod is not None:
             U_2k %= mod
             U_2k_minus_1 %= mod
 
         if (n >> i) & 1:
             # Incrementing step: U_{2k} -> U_{2k+1}
             U_2k_plus_1 = P*U_2k - Q*U_2k_minus_1
-            if mod:
+            if mod is not None:
                 U_2k_plus_1 %= mod
             U_k, U_k_minus_1 = U_2k_plus_1, U_2k
         else:
             U_k, U_k_minus_1 = U_2k, U_2k_minus_1
 
-    return U_k % mod if mod else U_k
+    return U_k if mod is None else U_k % mod
 
 @small_cache
 def fibonacci(i: int, mod: int | None = None) -> int:
@@ -4884,12 +4920,12 @@ def fibonacci_numbers(a: int = 0, b: int = 1, mod: int | None = None) -> Iterato
     mod : int
         Optional modulus
     """
-    a = a % mod if mod else a
-    b = b % mod if mod else b
+    a = a if mod is None else a % mod
+    b = b if mod is None else b % mod
     while True:
         yield a
         a, b = b, a + b
-        b = b % mod if mod else b
+        b = b if mod is None else b % mod
 
 def polygonal(s: int, i: int) -> int:
     """
@@ -4956,7 +4992,7 @@ def partition(n: int, restrict: Callable[[int], bool] | None = None) -> int:
     if restrict:
         return euler_transform(restrict)(n)
     else:
-        return nth(partition_numbers(), n + 1)
+        return next(itertools.islice(partition_numbers(), n, None))
 
 def partition_numbers(mod: int | None = None) -> Iterator[int]:
     """
@@ -4987,7 +5023,7 @@ def partition_numbers(mod: int | None = None) -> Iterator[int]:
             if off > n: break
             p += sign * partitions[n - off]
 
-        p = p % mod if mod else p
+        p = p if mod is None else p % mod
         yield p
         partitions.append(p)
 
@@ -5047,15 +5083,6 @@ def integer_pairs() -> Iterator[tuple[int, int]]:
             if y != 0:
                 yield (x, -y)
 
-def nth(iterable: Iterable, n: int, default: Any = None) -> Any:
-    """
-    Return the n-th item from an iterable (1-based index).
-    If the iterable has fewer than n items, return default.
-    """
-    if n < 1:
-        raise ValueError("n must be a positive integer (1-indexed)")
-    return next(itertools.islice(iterable, n - 1, None), default)
-
 def alternating(*iterables: Iterable) -> Iterator:
     """
     Visit input iterables in a cycle until each is exhausted.
@@ -5087,7 +5114,14 @@ def periodic_continued_fraction(
     """
     if is_square(D) or D <= 0:
         raise ValueError("D must be a non-square positive integer")
+    if Q == 0:
+        raise ZeroDivisionError("Q must be nonzero")
 
+    # Convert to canonical form where Q | (D - P^2)
+    if (D - P*P) % Q != 0:
+        P, D, Q = P * abs(Q), D * Q * Q, Q * abs(Q)
+
+    # Run the PQa algorithm
     coefficients, index, sqrt_D = [], {}, isqrt(D)
     a = (sqrt_D + P) // Q
     while (P, Q, a) not in index:
@@ -5200,7 +5234,7 @@ def polynomial(coefficients: Sequence[Number]) -> Callable[[Number], Number]:
 
     return horner
 
-def iroot(x: int, n: int = 2) -> int:
+def iroot(x: int, n: int) -> int:
     """
     Find the integer n-th root of x.
     Returns the largest integer a such that a^n <= x.
@@ -5265,25 +5299,6 @@ def is_square(n: int) -> bool:
     """
     return n >= 0 and (n & 0xF) in (0, 1, 4, 9) and (sqrt_n := isqrt(n)) * sqrt_n == n
 
-def squares(low: int = 0, high: int | None = None) -> Iterator[int]:
-    """
-    Generate square numbers in the range [low, high].
-    """
-    low, high = max(low, 0), inf if high is None else high
-    i = isqrt(int(low))
-    while (n := i*i) < low:
-        i += 1
-    while n <= high:
-        yield n
-        n += 2*i + 1
-        i += 1
-
-def non_squares(N: int) -> Iterator[int]:
-    """
-    Return all non-square positive integers <= N.
-    """
-    return (n for n in range(2, N + 1) if not is_square(n))
-
 def perfect_power(n: int) -> tuple[int, int]:
     """
     Find integers a, b such that a^b = n.
@@ -5325,6 +5340,8 @@ def binary_search(
         span = 1
         while f(low + span) < threshold: span *= 2
         high = low + span
+    elif f(high) < threshold:
+        raise ValueError("f(high) is below the threshold")
 
     return low + bisect.bisect_left(range(low, high + 1), threshold, key=f)
 
