@@ -59,11 +59,8 @@ DIOPHANTINE EQUATIONS:
 SEQUENCES:
 - nt.fibonacci(n) -> int: n-th Fibonacci number
 - nt.lucas(n) -> int: n-th Lucas number
-- nt.partition_numbers(n) -> list[int]: Partition numbers p(0), ..., p(n)
-
-COMBINATORICS:
-- nt.pascal(n) -> list[list[int]]: Pascal's triangle rows 0 to n
-- nt.binomial_valuation(n, k, p) -> int: Largest e where p^e divides C(n,k)
+- nt.partition(n) -> int: n-th partition number p(n)
+- nt.partition_numbers(mod=None) -> Iterator[int]: Partition numbers p(0), p(1), ...
 
 UTILITIES:
 - nt.iroot(x, n=2) -> int: Integer n-th root (floor)

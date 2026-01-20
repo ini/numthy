@@ -48,7 +48,7 @@ __all__ = [
     # Diophantine Equations
     'bezout', 'cornacchia', 'pell', 'conic', 'pythagorean_triples', 'pillai',
     # Lattices
-    'integer_solve', 'lll_reduce', 'bkz_reduce', 'babai_closest_vector', 'coppersmith',
+    'coppersmith', 'lll_reduce', 'bkz_reduce', 'babai_closest_vector',
     # Sequences
     'lucas', 'fibonacci', 'fibonacci_index', 'fibonacci_numbers',
     'polygonal', 'polygonal_index', 'polygonal_numbers', 'is_polygonal',
@@ -3931,77 +3931,125 @@ def _pillai_bound(a: int, b: int, c: int) -> int:
 ############################### Lattices ###############################
 ########################################################################
 
-def integer_solve(
-    A: Matrix[int],
-    b: Vector[int] | None = None
-) -> tuple[Vector[int] | None, list[Vector[int]]]:
+def coppersmith(
+    coefficients: Sequence[int],
+    mod: int,
+    X: int | None = None,
+    epsilon: float = 0.05,
+    m: int | None = None,
+) -> tuple[int, ...]:
     """
-    Find integer solutions to Ax = b and compute the kernel of A.
+    Find small integer roots of a monic polynomial modulo M using Coppersmith's method.
 
-    Uses Smith normal form decomposition to find a particular solution and
-    a Z-basis for the nullspace (kernel). Returns both components of the
-    general solution: x_particular + ker(A).
+    Uses LLL lattice reduction to find roots x where |x| < X for f(x) ≡ 0 (mod M).
+    Based on Howgrave-Graham's formulation of Coppersmith's theorem.
+
+    See: https://cr.yp.to/bib/2001/howgrave-graham.pdf
+    See: https://link.springer.com/chapter/10.1007/3-540-68339-9_14
 
     Parameters
     ----------
-    A : Matrix[int]
-        Integer coefficient matrix
-    b : Vector[int]
-        Integer target vector. If None, returns zero vector as particular solution.
+    coefficients : Sequence[int]
+        Polynomial coefficients (a₀, a₁, a₂, ...) representing
+        f(x) = a₀ + a₁x + a₂x² + ...
+    mod : int
+        Modulus
+    X : int
+        Bound on root size (|x| < X).
+        If None, uses theoretical bound X ≈ M^(1/d - epsilon), where M is the modulus
+    epsilon : float
+        Parameter controlling lattice dimension vs root bound trade-off.
+        Smaller epsilon allows larger X but requires larger lattice. Default: 0.05.
+    m : int
+        Lattice parameter controlling the number of polynomial shifts. If None,
+        computed from epsilon as m = ceil(1 / (d * epsilon)).
+        Larger m gives better success probability but slower runtime.
 
-    Returns
-    -------
-    particular : Vector | None
-        A particular integer solution with free variables set to 0.
-        Returns None if b is provided but no integer solution exists.
-        Returns zero vector if b is None.
-    nullspace : list[Vector]
-        Z-basis for ker(A), the integer nullspace of A.
-        General solution is x_particular + linear combinations of nullspace basis.
+    Complexity
+    ----------
+    O(d⁶ log³N) time and O(d⁴) space, where d is the polynomial degree.
     """
-    if not A:
-        if b is None:
-            return ([], [])
-        return ([] if not b else None, [])
+    M = abs(mod)
+    if M == 0:
+        raise ZeroDivisionError("Modulus must be nonzero")
+    if epsilon <= 0:
+        raise ValueError("Must have epsilon > 0")
 
-    num_rows, num_cols = len(A), len(A[0])
+    # Remove leading zeros
+    coefficients = list(coefficients)
+    while len(coefficients) > 1 and coefficients[-1] == 0:
+        coefficients.pop()
 
-    if b is not None and len(b) != num_rows:
-        raise ValueError("Dimension mismatch")
+    # Get polynomial degree
+    d = len(coefficients) - 1
+    if d <= 0:
+        return ()
 
-    S, U, V = _smith_normal_form(A)
-    rank = sum(1 for k in range(min(num_rows, num_cols)) if S[k][k] != 0)
+    # Make polynomial monic by scaling
+    if (lead := coefficients[-1]) != 1:
+        if gcd(lead, M) != 1:
+            raise ValueError("Leading coefficient must be coprime to modulus")
+        lead_inv = pow(lead, -1, M)
+        coefficients = [(c * lead_inv) % M for c in coefficients]
 
-    # Compute nullspace basis
-    nullspace = [[V[i][j] for i in range(num_cols)] for j in range(rank, num_cols)]
+    # Adjust hyperparameters
+    epsilon = min(epsilon, 1/d)
+    if m is None:
+        m = max(1, ceil(1 / (d * epsilon)))
 
-    # If b is None, return zero vector as particular solution
-    if b is None:
-        return ([0] * num_cols, nullspace)
+    # Set default bound X = M^(1/d - epsilon)
+    if X is None:
+        eps = Fraction(epsilon).limit_denominator(1000)
+        num = eps.denominator - eps.numerator * d
+        den = eps.denominator * d
+        X = max(1, iroot(pow(M, num), den))
+    else:
+        X = max(X, 1)
 
-    # Compute b' = U @ b
-    b_ = [sum(U[i][j] * b[j] for j in range(num_rows)) for i in range(num_rows)]
+    # Build the lattice basis using Howgrave-Graham's construction
+    # Each row corresponds to a polynomial g_{i,j}(x * X)
+    # where g_{i,j}(x) = M^(m-i) * x^j * f(x)^i for i = 0 ... m - 1, j = 0 ... d - 1
+    # Each polynomial g has degree at most i*d + j < m*d = n
+    n = d * m  # lattice dimension
+    B = [[0] * n for _ in range(n)]
 
-    # Check consistency
-    for i in range(rank, num_rows):
-        if all(S[i][j] == 0 for j in range(num_cols)) and b_[i] != 0:
-            return (None, nullspace)
+    # Precompute powers of f(x) mod x^n
+    # where f_powers[i][k] = coefficient of x^k in f(x)^i
+    f_powers = [[0] * n for _ in range(m + 1)]
+    f_powers[0][0] = 1
+    for i in range(1, m + 1):
+        for j in range(min(n, (i - 1) * d + 1)):
+            if f_powers[i - 1][j] == 0: continue
+            for k in range(min(d + 1, n - j)):
+                f_powers[i][j + k] += f_powers[i - 1][j] * coefficients[k]
 
-    # Solve S @ y = b'
-    y = [0] * num_cols
-    for k in range(rank):
-        d = S[k][k]
-        if d == 0:
-            if b_[k] != 0:
-                return (None, nullspace)
+    # Build a lattice of polynomials that all vanish mod M^m at roots of f
+    # Row (i*d + j) of B encodes x^j * f^i * M^(m-i), scaled by X^k at position k
+    M_power = pow(M, m)
+    X_powers = [X**i for i in range(n)]
+    for i in range(m):
+        for j in range(d):
+            for k in range(j, n):
+                B[i*d + j][k] = M_power * X_powers[k] * f_powers[i][k - j]
+
+        M_power //= M
+
+    # Extract polynomials from short vectors and find their integer roots
+    # By Howgrave-Graham's lemma, if h(x) has small coefficients (i.e. from LLL)
+    # and h(x0) = 0 (mod M^m) with |x0| < X, then h(x0) = 0 over the integers
+    f, roots = polynomial(coefficients), set()
+    for row in lll_reduce(B):
+        # Reconstruct polynomial h(x) from vector [h_0, h_1*X, h_2*X^2, ...]
+        h, remainders = zip(*[divmod(row[k], X_powers[k]) for k in range(n)])
+        if any(remainders) or not any(h):
             continue
-        if b_[k] % d != 0:
-            return (None, nullspace)
-        y[k] = b_[k] // d
 
-    # x = V @ y
-    particular = [sum(V[i][j] * y[j] for j in range(num_cols)) for i in range(num_cols)]
-    return (particular, nullspace)
+        # Find integer roots of h(x) using rational root theorem
+        for x0 in _integer_polynomial_roots(h):
+            if abs(x0) < X and f(x0) % M == 0:
+                roots.add(x0)
+
+    return tuple(sorted(roots))
 
 def lll_reduce(B: Matrix[int]) -> Matrix[int]:
     """
@@ -4198,256 +4246,20 @@ def babai_closest_vector(B: Matrix[int], target: Vector[int]) -> Vector[int]:
 
     return v
 
-def coppersmith(
-    coefficients: Sequence[int],
-    mod: int,
-    X: int | None = None,
-    epsilon: float = 0.05,
-    m: int | None = None,
-) -> tuple[int, ...]:
+def _nearest_int(q: Real) -> int:
     """
-    Find small integer roots of a monic polynomial modulo M using Coppersmith's method.
-
-    Uses LLL lattice reduction to find roots x where |x| < X for f(x) ≡ 0 (mod M).
-    This is particularly useful for cryptographic applications like RSA attacks
-    when partial information about a root is known.
-
-    Based on Howgrave-Graham's formulation of Coppersmith's theorem.
-
-    See: https://cr.yp.to/bib/2001/howgrave-graham.pdf
-    See: https://link.springer.com/chapter/10.1007/3-540-68339-9_14
-
-    Parameters
-    ----------
-    coefficients : Sequence[int]
-        Polynomial coefficients (a₀, a₁, a₂, ...) representing
-        f(x) = a₀ + a₁x + a₂x² + ...
-    mod : int
-        Modulus
-    X : int
-        Bound on root size (|x| < X).
-        If None, uses theoretical bound X ≈ M^(1/d - epsilon), where M is the modulus
-    epsilon : float
-        Parameter controlling lattice dimension vs root bound trade-off.
-        Smaller epsilon allows larger X but requires larger lattice. Default: 0.05.
-    m : int
-        Lattice parameter controlling the number of polynomial shifts. If None,
-        computed from epsilon as m = ceil(1 / (d * epsilon)).
-        Larger m gives better success probability but slower runtime.
-
-    Complexity
-    ----------
-    O(d⁶ log³N) time and O(d⁴) space, where d is the polynomial degree.
+    Round to nearest integer, ties away from zero.
     """
-    M = abs(mod)
-    if M == 0:
-        raise ZeroDivisionError("Modulus must be nonzero")
-    if epsilon <= 0:
-        raise ValueError("Must have epsilon > 0")
+    one_half = 0.5 if isinstance(q, float) else Fraction(1, 2)
+    return int(q + one_half) if q >= 0 else -int(-q + one_half)
 
-    # Remove leading zeros
-    coefficients = list(coefficients)
-    while len(coefficients) > 1 and coefficients[-1] == 0:
-        coefficients.pop()
-
-    # Get polynomial degree
-    d = len(coefficients) - 1
-    if d <= 0:
-        return ()
-
-    # Make polynomial monic by scaling
-    if (lead := coefficients[-1]) != 1:
-        if gcd(lead, M) != 1:
-            raise ValueError("Leading coefficient must be coprime to modulus")
-        lead_inv = pow(lead, -1, M)
-        coefficients = [(c * lead_inv) % M for c in coefficients]
-
-    # Adjust hyperparameters
-    epsilon = min(epsilon, 1/d)
-    if m is None:
-        m = max(1, ceil(1 / (d * epsilon)))
-
-    # Set default bound X = M^(1/d - epsilon)
-    if X is None:
-        eps = Fraction(epsilon).limit_denominator(1000)
-        num = eps.denominator - eps.numerator * d
-        den = eps.denominator * d
-        X = max(1, iroot(pow(M, num), den))
-    else:
-        X = max(X, 1)
-
-    # Build the lattice basis using Howgrave-Graham's construction
-    # Each row corresponds to a polynomial g_{i,j}(x * X)
-    # where g_{i,j}(x) = M^(m-i) * x^j * f(x)^i for i = 0 ... m - 1, j = 0 ... d - 1
-    # Each polynomial g has degree at most i*d + j < m*d = n
-    n = d * m  # lattice dimension
-    B = [[0] * n for _ in range(n)]
-
-    # Precompute powers of f(x) mod x^n
-    # where f_powers[i][k] = coefficient of x^k in f(x)^i
-    f_powers = [[0] * n for _ in range(m + 1)]
-    f_powers[0][0] = 1
-    for i in range(1, m + 1):
-        for j in range(min(n, (i - 1) * d + 1)):
-            if f_powers[i - 1][j] == 0: continue
-            for k in range(min(d + 1, n - j)):
-                f_powers[i][j + k] += f_powers[i - 1][j] * coefficients[k]
-
-    # Build a lattice of polynomials that all vanish mod M^m at roots of f
-    # Row (i*d + j) of B encodes x^j * f^i * M^(m-i), scaled by X^k at position k
-    M_power = pow(M, m)
-    X_powers = [X**i for i in range(n)]
-    for i in range(m):
-        for j in range(d):
-            for k in range(j, n):
-                B[i*d + j][k] = M_power * X_powers[k] * f_powers[i][k - j]
-
-        M_power //= M
-
-    # Extract polynomials from short vectors and find their integer roots
-    # By Howgrave-Graham's lemma, if h(x) has small coefficients (i.e. from LLL)
-    # and h(x0) = 0 (mod M^m) with |x0| < X, then h(x0) = 0 over the integers
-    f, roots = polynomial(coefficients), set()
-    for row in lll_reduce(B):
-        # Reconstruct polynomial h(x) from vector [h_0, h_1*X, h_2*X^2, ...]
-        h, remainders = zip(*[divmod(row[k], X_powers[k]) for k in range(n)])
-        if any(remainders) or not any(h):
-            continue
-
-        # Find integer roots of h(x) using rational root theorem
-        for x0 in _integer_polynomial_roots(h):
-            if abs(x0) < X and f(x0) % M == 0:
-                roots.add(x0)
-
-    return tuple(sorted(roots))
-
-def _smith_normal_form(A: Matrix[int]) -> tuple[Matrix[int], Matrix[int], Matrix[int]]:
+def _dot(x: Vector, y: Vector, exact: bool = False):
     """
-    Compute Smith normal form with unimodular transforms.
-
-    The Smith normal form S is a diagonal matrix with non-negative entries
-    d_1, d_2, ..., d_r where each d_i divides d_{i+1}.
-
-    Returns matrices S, and transforms U, V where the transforms satisfy U @ A @ V = S.
-
-    Parameters
-    ----------
-    A : Matrix
-        Integer matrix
-
-    Returns
-    -------
-    S : Matrix
-        Diagonal matrix (Smith normal form)
-    U : Matrix
-        Unimodular left transform (determinant = +/-1)
-    V : Matrix
-        Unimodular right transform (determinant = +/-1)
-
-    Complexity
-    ----------
-    O(mn * min(m, n) * log B) time for m × n matrix with max entry size B.
-    O(mn) space for matrix storage and transforms.
+    Compute the dot product of two vectors.
     """
-    if not A:
-        return [], [], []
-
-    M = [row[:] for row in A]
-    num_rows, num_cols = len(M), len(M[0])
-    U = [[1 if i == j else 0 for j in range(num_rows)] for i in range(num_rows)]
-    V = [[1 if i == j else 0 for j in range(num_cols)] for i in range(num_cols)]
-
-    i = j = 0
-    while i < num_rows and j < num_cols:
-        # Find smallest nonzero in active submatrix
-        best, best_abs = None, None
-        for r in range(i, num_rows):
-            for c in range(j, num_cols):
-                v = M[r][c]
-                if v != 0 and (best is None or abs(v) < best_abs):
-                    best, best_abs = (r, c), abs(v)
-        if best is None:
-            break
-
-        r0, c0 = best
-        if r0 != i:
-            M[i], M[r0] = M[r0], M[i]
-            U[i], U[r0] = U[r0], U[i]
-        if c0 != j:
-            _swap_cols((M, V), j, c0)
-
-        while (pivot := M[i][j]) != 0:
-            if pivot < 0:
-                _row_scale((M, U), i, -1)
-                pivot = -pivot
-
-            # When we perform a swap, move on to the next iteration
-            swapped = False
-
-            # Clear column
-            for r in range(num_rows):
-                if r == i:
-                    continue
-                while M[r][j] != 0:
-                    q = M[r][j] // pivot
-                    _row_add((M, U), r, i, -q)
-                    if 0 < abs(M[r][j]) < pivot:
-                        M[i], M[r] = M[r], M[i]
-                        U[i], U[r] = U[r], U[i]
-                        swapped = True
-                        break
-                if swapped:
-                    break
-                pivot = abs(M[i][j]) if M[i][j] != 0 else pivot
-            if swapped:
-                continue
-
-            # Clear row
-            pivot = M[i][j]
-            if pivot < 0:
-                _row_scale((M, U), i, -1)
-                pivot = -pivot
-            for c in range(num_cols):
-                if c == j: continue
-                while M[i][c] != 0:
-                    q = M[i][c] // pivot
-                    _col_add((M, V), c, j, -q)
-                    if 0 < abs(M[i][c]) < pivot:
-                        _swap_cols((M, V), j, c)
-                        swapped = True
-                        break
-                if swapped:
-                    break
-                pivot = abs(M[i][j]) if M[i][j] != 0 else pivot
-            if swapped:
-                continue
-
-            if (pivot := M[i][j]) == 0: break
-            if pivot < 0:
-                _row_scale((M, U), i, -1)
-                pivot = -pivot
-
-            # Enforce divisibility
-            witnesses = ((r, c) for r in range(i, num_rows) for c in range(j, num_cols))
-            witness = next(((r, c) for r, c in witnesses if M[r][c] % pivot), None)
-            if witness is None:
-                break
-
-            wr, wc = witness
-            if wc != j:
-                _col_add((M, V), j, wc, 1)
-            else:
-                _row_add((M, U), i, wr, 1)
-
-        i += 1
-        j += 1
-
-    # Normalize diagonal signs
-    for k in range(min(num_rows, num_cols)):
-        if M[k][k] < 0:
-            _row_scale((M, U), k, -1)
-
-    return M, U, V
+    if exact:
+        return sum((x_i * y_i for x_i, y_i in zip(x, y)), Fraction(0))
+    return fsum(x_i * y_i for x_i, y_i in zip(x, y))
 
 def _gso(
     B: Matrix[int],
@@ -4712,58 +4524,6 @@ def _integer_polynomial_roots(coefficients: list[int]) -> Iterator[int]:
     # By the rational root theorem, any integer roots must divide the constant term
     f = polynomial(coefficients)
     yield from (x for d in divisors(coefficients[0]) for x in (d, -d) if f(x) == 0)
-
-def _dot(left, right, exact: bool = False):
-    """
-    Compute the dot product of two vectors.
-    """
-    if exact:
-        return sum((x * y for x, y in zip(left, right)), Fraction(0))
-    return fsum(x * y for x, y in zip(left, right))
-
-def _row_add(matrices: Iterable[Matrix], i: int, k: int, t: int):
-    """
-    Add t times row k to row i.
-    """
-    for X in matrices:
-        X[i] = [a + t*b for a, b in zip(X[i], X[k])]
-
-def _col_add(matrices: Iterable[Matrix], j: int, k: int, t: int):
-    """
-    Add t times column k to column j.
-    """
-    for X in matrices:
-        for row in X:
-            row[j] += t * row[k]
-
-def _row_scale(matrices: Iterable[Matrix], i: int, s: int):
-    """
-    Scale row i by factor s.
-    """
-    for X in matrices:
-        X[i] = [s * v for v in X[i]]
-
-def _swap_rows(matrices: Iterable[Matrix], i: int, j: int):
-    """
-    Swap rows i and j.
-    """
-    for X in matrices:
-        X[i], X[j] = X[j], X[i]
-
-def _swap_cols(matrices: Iterable[Matrix], j: int, k: int):
-    """
-    Swap columns j and k.
-    """
-    for X in matrices:
-        for row in X:
-            row[j], row[k] = row[k], row[j]
-
-def _nearest_int(q: int | float | Fraction) -> int:
-    """
-    Round to nearest integer, ties away from zero.
-    """
-    one_half = 0.5 if isinstance(q, float) else Fraction(1, 2)
-    return int(q + one_half) if q >= 0 else -int(-q + one_half)
 
 
 

@@ -47,53 +47,6 @@ The same algorithms used by Mathematica, SageMath, and research-grade CAS system
 
 See [API.md](API.md) for the full API reference.
 
-## Natural Language CLI
-
-Ask number theory questions in plain English:
-
-```bash
-pip install numthy[cli]
-export ANTHROPIC_API_KEY=your-key
-
-numthy "Is 2^89 - 1 prime?"
-# True
-
-numthy "Factor 2^64 + 1"
-# (274177, 67280421310721)
-
-numthy "Find the first 10 Fibonacci primes"
-```
-
-Or use expressions directly (no API key needed):
-
-```bash
-numthy "prime_factors(2**64 + 1)"
-numthy "is_prime(2**89 - 1)"
-```
-
-## MCP Server (for Claude)
-
-numthy includes an MCP server that lets Claude use number theory functions directly.
-
-```bash
-pip install numthy[mcp]
-```
-
-Add to your Claude config (`~/.claude/claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "numthy": {
-      "command": "python",
-      "args": ["-m", "mcp_server"]
-    }
-  }
-}
-```
-
-Then ask Claude things like "Is 2^89 - 1 prime?" or "Factor 2^64 + 1".
-
 ## Requirements
 
 Python 3.10+
