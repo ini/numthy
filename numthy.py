@@ -1918,6 +1918,11 @@ def _nullspace_gf2(rows: list[int]) -> list[int]:
 def omega(n: int) -> int:
     """
     Compute the value of ω(n), the number of distinct prime factors of n.
+
+    Parameters
+    ----------
+    n: int
+        Positive integer function argument
     """
     if n < 1:
         raise ValueError("n must be a positive integer")
@@ -1926,6 +1931,11 @@ def omega(n: int) -> int:
 def big_omega(n: int) -> int:
     """
     Compute the value of Ω(n), the number of prime factors of n (with multiplicity).
+
+    Parameters
+    ----------
+    n: int
+        Positive integer function argument
     """
     if n < 1:
         raise ValueError("n must be a positive integer")
@@ -1934,6 +1944,11 @@ def big_omega(n: int) -> int:
 def divisor_count(n: int) -> int:
     """
     Compute the value of σ₀(n), the number of divisors of n.
+
+    Parameters
+    ----------
+    n: int
+        Positive integer function argument
     """
     if n < 1:
         raise ValueError("n must be a positive integer")
@@ -1942,6 +1957,11 @@ def divisor_count(n: int) -> int:
 def divisor_sum(n: int) -> int:
     """
     Compute the value of σ₁(n), the sum of divisors of n.
+
+    Parameters
+    ----------
+    n: int
+        Positive integer function argument
     """
     if n < 1:
         raise ValueError("n must be a positive integer")
@@ -2065,11 +2085,22 @@ def valuation(n: int, p: int) -> int:
         raise ValueError("n must be a positive integer")
     if not is_prime(p):
         raise ValueError("p must be prime")
+    if p == 2:
+        return (n & -n).bit_length() - 1  # number of trailing 0's
 
+    # For general p, use doubling to achieve O(log v) divisions
+    # Build powers p, p^2, p^4, p^8, ... while p^(2^k) <= n
+    powers = [(p, 1)]
+    power, exponent = 1
+    while (power := power * power) <= n:
+        powers.append((power, exponent := 2*exponent))
+
+    # Greedily divide out largest powers first
     v = 0
-    while n % p == 0:
-        n //= p
-        v += 1
+    for powers, exponent in reversed(powers):
+        while n % powers == 0:
+            n //= powers
+            v += exponent
 
     return v
 
@@ -3405,19 +3436,17 @@ def pell(D: int, N: int = 1) -> Iterator[tuple[int, int]]:
     minimal_positive_solutions = set()
     for x, y in fundamental_solutions:
         if x > 0 and y > 0:
-            px, py = x, y
+            x, y = x, y
         elif x < 0 and y < 0:
-            px, py = -x, -y
+            x, y = -x, -y
         else:
-            px, py = (-x*t0 + -y*u0*D, -x*u0 + -y*t0)
+            x, y = (-x*t0 + -y*u0*D, -x*u0 + -y*t0)
+
         # Reduce within the Pell class to the minimal positive solution.
-        while True:
-            x_next = px*t0 - D*py*u0
-            y_next = py*t0 - px*u0
-            if x_next <= 0 or y_next <= 0:
-                break
-            px, py = x_next, y_next
-        minimal_positive_solutions.add((px, py))
+        while min(solution := (x*t0 - D*y*u0, y*t0 - x*u0)) > 0:
+            x, y = solution
+
+        minimal_positive_solutions.add((x, y))
 
     # Yield minimal positive solutions to x^2 - Dy^2 = N
     minimal_positive_solutions = sorted(minimal_positive_solutions)
@@ -4025,7 +4054,7 @@ def small_roots(
         raise ValueError("bounds required for multivariate instances")
     if bounds and len(bounds) != num_variables:
         raise ValueError("bounds length mismatch")
-    if num_variables == 0 or (degree := _poly_degree_total(f)) <= 0:
+    if num_variables == 0 or (degree := _poly_degree(f)) <= 0:
         return []
     if bounds is None and num_variables == 1:
         bounds = (max(2, iroot(M, degree)),)
@@ -4177,12 +4206,7 @@ def closest_vector(B: Matrix[int], target: Vector[int]) -> Vector[int]:
             y = [y_i - c * b_i for y_i, b_i in zip(y, B[i])]
 
     # Reconstruct lattice vector from integer coefficients
-    v = [0] * dim
-    for c, b_i in zip(coeffs, B):
-        if c != 0:
-            v = [v_i + c * b_ij for v_i, b_ij in zip(v, b_i)]
-
-    return v
+    return [sum(c * b_i[j] for c, b_i in zip(coeffs, B) if c) for j in range(dim)]
 
 def _nearest_int(q: Real) -> int:
     """
@@ -4303,8 +4327,7 @@ def _lll_reduce_block(
             for j in range(i - 1, start - 1, -1):
                 if (c := _nearest_int(mu[i][j])) != 0:
                     B[i] = [x - c * y for x, y in zip(B[i], B[j])]  # update basis
-                    for k in range(j + 1):
-                        mu[i][k] -= c * mu[j][k]  # incremental μ update
+                    mu[i][:j+1] = [mu[i][k] - c * mu[j][k] for k in range(j + 1)]
 
         # Recompute bstar[i] and mu[i] after size reduction
         bstar[i] = [number_type(x) for x in B[i]]
@@ -4369,10 +4392,8 @@ def _bkz_tour(
         for j in range(i - 1, -1, -1):
             if q := _nearest_int(mu[i][j]):
                 changed = True
-                for t in range(dim):
-                    B[i][t] -= q * B[j][t]
-                for t in range(j + 1):
-                    mu[i][t] -= q * mu[j][t]
+                B[i] = [B[i][t] - q * B[j][t] for t in range(dim)]
+                mu[i][:j+1] = [mu[i][t] - q * mu[j][t] for t in range(j + 1)]
 
     # Update GSO coefficients
     if changed:
@@ -4395,8 +4416,10 @@ def _bkz_tour(
 
         # We've found an improvement, so insert v = Σ c_i * b_{k+i} into basis
         improved = True
-        v = [sum(c * B[k + i][t] for i, c in enumerate(coefficients) if c)
-             for t in range(dim)]
+        v = [
+            sum(c * B[k + i][t] for i, c in enumerate(coefficients) if c)
+            for t in range(dim)
+        ]
         B.insert(k, v)
 
         # LLL-reduce window to restore Lovasz condition
@@ -4500,16 +4523,12 @@ def _poly_num_variables(f: Polynomial) -> int:
     """
     return len(next(iter(f))) if f else 0
 
-def _poly_degree_total(f: Polynomial) -> int:
+def _poly_degree(f: Polynomial, weights: tuple[int, ...] | None = None) -> int:
     """
-    Return the total degree of multivariate polynomial f.
+    Return the degree of multivariate polynomial f.
     """
-    return max((sum(m) for m in f), default=-1)
-
-def _poly_degree_weighted(f: Polynomial, weights: tuple[int, ...]) -> int:
-    """
-    Return the maximum weighted degree over all monomials in multivariate polynomial f.
-    """
+    if weights is None:
+        return max((sum(m) for m in f), default=-1)
     return max((sum(w * e for w, e in zip(weights, m)) for m in f), default=-1)
 
 def _poly_eval(f: Polynomial, x: tuple[int, ...], mod: int = None) -> int:
@@ -4649,13 +4668,13 @@ def _permute_variables(
 def _apply_value(
     polynomials: list[Polynomial[int]],
     variable_index: int,
-    val: int,
+    value: int,
 ) -> list[Polynomial[int]] | None:
     """
     Substitute a value at the given variable into all polynomials.
     Returns None if any becomes inconsistent.
     """
-    substituted = [_poly_substitute(f, variable_index, val) for f in polynomials]
+    substituted = [_poly_substitute(f, variable_index, value) for f in polynomials]
     non_zero = [g for g in substituted if g]
     return None if any(_poly_num_variables(g) == 0 for g in non_zero) else non_zero
 
@@ -4694,10 +4713,9 @@ def _grobner_basis(
         G[i] = _poly_reduce(G[i], G[:i] + G[i + 1:])
 
     # Convert back to integer coefficients
-    G = [_poly_make_monic(f) for f in G if f]
     return [
         _poly_make_canonical({m: int(c * denominator) for m, c in g.items()})
-        for g in G
+        for g in (_poly_make_monic(f) for f in G if f)
         for denominator in [lcm(*(c.denominator for c in g.values()))]
     ]
 
@@ -4708,9 +4726,8 @@ def _find_integer_roots_bounded_univariate(
     """
     Find all integer roots r with |r| < bound for a univariate polynomial.
     """
-    f = polynomial(coefficients)
-
     # Handle special cases
+    f = polynomial(coefficients)
     if len(coefficients) <= 1:
         return set()  # constant polynomial
     if bound <= 35000:
@@ -4827,7 +4844,7 @@ def _build_coppersmith_shifts(
     Returns (shifts, basis) where basis is the sorted list of monomials.
     """
     n, weights = len(bounds), _monomial_weights_from_bounds(bounds)
-    f_weighted_degree = _poly_degree_weighted(f, weights)
+    f_weighted_degree = _poly_degree(f, weights)
     k_max = min(m, t // f_weighted_degree)
 
     # Precompute powers f^0, f^1, ..., f^k_max
@@ -4869,11 +4886,11 @@ def _choose_jochemsz_may_params(
     Returns (m, shifted_polynomials, monomial_basis).
     """
     # Set initial m parameter based on epsilon
-    m0 = max(1, ceil(1 / (max(1, _poly_degree_total(f)) * epsilon)))
+    m0 = max(1, ceil(1 / (max(1, _poly_degree(f)) * epsilon)))
 
     # Scan from m0 down, collect (m, t) candidates where the resulting lattice fits
     candidates = []
-    f_weighted_degree = _poly_degree_weighted(f, _monomial_weights_from_bounds(bounds))
+    f_weighted_degree = _poly_degree(f, weights=_monomial_weights_from_bounds(bounds))
     for m in range(m0, 0, -1):
         t = m * f_weighted_degree
         polynomials, basis = _build_coppersmith_shifts(f, bounds, M, m, t)
@@ -4890,12 +4907,11 @@ def _make_coppersmith_lattice(
     bounds: tuple[int, ...],
 ) -> tuple[list[list[int]], list[int], Polynomial[int]]:
     """
-    Construct scaled lattice matrix from shifted polynomials and monomial basis.
+    Construct scaled lattice matrix from shifted polynomials and monomial basis,
+    where each row is a polynomial and columns are monomials.
     """
     basis_index = {monomial: i for i, monomial in enumerate(monomial_basis)}
     scales = [prod(pow(b, e) for b, e in zip(bounds, m)) for m in monomial_basis]
-
-    # Construct lattice where each row is a polynomial and columns are monomials
     lattice = [[0] * len(monomial_basis) for _ in range(len(shifted_polynomials))]
     for i, f in enumerate(shifted_polynomials):
         for monomial, coefficient in f.items():
@@ -4935,7 +4951,7 @@ def _select_coppersmith_polynomials(
     Deduplicate, rank by complexity, and select linearly independent polynomials.
     """
     # Deduplicate and rank polynomials by (weighted degree, term count, max coefficient)
-    degree = partial(_poly_degree_weighted, weights=weights)
+    degree = partial(_poly_degree, weights=weights)
     unique = list({tuple(sorted(f.items())): f for f in polynomials}.values())
     unique.sort(key=lambda f: (degree(f), len(f), max(map(abs, f.values()))))
 
@@ -4959,10 +4975,8 @@ def _reduce_vector(
 ) -> tuple[int, list[int]] | None:
     """
     Reduce vector against the given pivots, where pivots[col] = pivot_row.
-    Return (pivot_col, row) if independent, None if dependent.
+    Return (pivot_col, reduced_vector) if independent, None if dependent.
     """
-    v = v.copy()
-
     # Gaussian elimination against existing pivots
     for pivot_col in sorted(pivots):
         if v[pivot_col] == 0: continue
@@ -4975,11 +4989,8 @@ def _reduce_vector(
     for j, a in enumerate(v):
         if a % mod:
             inv = pow(a, -1, mod)
-            for k in range(j, len(v)):
-                v[k] = (v[k] * inv) % mod
+            v[j:] = [(v[k] * inv) % mod for k in range(j, len(v))]
             return (j, v)
-
-    return None
 
 
 
