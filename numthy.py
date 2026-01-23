@@ -19,7 +19,7 @@ from collections.abc import Iterable, Sequence
 from fractions import Fraction
 from functools import cache, lru_cache, partial, reduce
 from heapq import heappop, heappush, nsmallest
-from math import ceil, fsum, gcd, inf, isqrt, lcm, log, prod, sqrt
+from math import ceil, fsum, gcd, inf, isfinite, isqrt, lcm, log, prod, sqrt
 from operator import mul, xor
 from typing import Callable, Collection, Iterator, TypeAlias, TypeVar
 
@@ -98,7 +98,8 @@ def is_prime(n: int) -> bool:
     primality test (this variant has no known pseudoprimes in any range, and
     has been computationally verified to have no counterexamples for all n < 2^64).
 
-    See: https://miller-rabin.appspot.com (deterministic Miller-Rabin base sets)
+    See: https://www.techneon.com/download/is.prime.32.base.data (MR hash for n < 2^32)
+    See: https://miller-rabin.appspot.com (other deterministic MR base sets)
     See: https://ntheory.org/pseudoprimes.html (BPSW verification up to 2^64)
 
     Parameters
@@ -114,24 +115,25 @@ def is_prime(n: int) -> bool:
         return n in {3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59}
     if gcd(n, 961380175077106319535) > 1:  # GCD with 3 * 5 * ... * 59 (odd primes only)
         return False
+    if n < 3481:  # n < 59^2, and n coprime to all primes <= 59 => n is prime
+        return True
 
     # Check for Mersenne primes
     if n.bit_length() == (k := n.bit_count()):  # n = 2^k - 1
         return _lucas_lehmer(k)
 
     # Use deterministic set of Miller-Rabin bases for small n
-    if n < 341531:
-        bases = (9345883071009581737,)
-    elif n < 1050535501:
-        bases = (336781006125, 9639812373923155)
-    elif n < 350269456337:
-        bases = (4230279247111683200, 14694767155120705706, 16641139526367750375)
-    elif n < 55245642489451:
+    if n < 132239:
+        return _miller_rabin(n, (814494960528 % n,))
+    if n < 4294967296:
+        # Use hash-based Miller-Rabin witness table for n < 2^32
+        h = (0xAD625B89 * n) >> 24 & 255
+        return _miller_rabin(n, _miller_rabin_bases_32()[h:h+1])
+    if n < 55245642489451:
         bases = (2, 141889084524735, 1199124725622454117, 11096072698276303650)
-    else:
-        return _baillie_psw(n)  # BPSW has zero known pseudoprimes
+        return _miller_rabin(n, (a % n for a in bases))
 
-    return _miller_rabin(n, bases)
+    return _baillie_psw(n)  # BPSW has zero known pseudoprimes
 
 def next_prime(n: int) -> int:
     """
@@ -341,29 +343,68 @@ def _miller_rabin_worker(n: int, s: int, d: int, bases: Iterable[int] | int) -> 
     where n - 1 = 2^s * d with d odd.
 
     See: https://www.sciencedirect.com/science/article/pii/0022314X80900840
-
-    Complexity
-    ----------
-    O(k log³n) time for k bases, with worst-case error probability 4⁻ᵏ
     """
     # Generate random bases, if specific bases have not been given
     if isinstance(bases, int):
         bases = (secrets.randbelow(n - 3) + 2 for _ in range(bases))
-    else:
-        bases = (a for base in bases if (a := base % n) != 0)
 
     # Run a Miller-Rabin test for each base
     for a in bases:
         x = pow(a, d, n)
-        if x == n - 1 or x == 1: continue  # probable prime
+        if x == n - 1 or x == 1:
+            continue  # probable prime
 
         for _ in range(s - 1):
             x = pow(x, 2, n)
-            if x == n - 1: break  # probable prime
+            if x == n - 1:
+                break  # probable prime
         else:
             return False  # composite
 
     return True  # All bases passed
+
+@singleton
+def _miller_rabin_bases_32() -> tuple[int, ...]:
+    """
+    Hash-based Miller-Rabin witness table for n < 2^32,
+    with hash (0xAD625B89 * n) >> 24 & 255.
+
+    See: https://www.techneon.com/download/is.prime.32.base.data
+    """
+    return (
+        1216, 1836, 8885, 4564, 10978, 5228, 15613, 13941,
+        1553, 173, 3615, 3144, 10065, 9259, 233, 2362,
+        1598, 551, 2285, 6146, 6804, 6275, 4054, 2057,
+        7886, 8334, 5869, 2055, 1578, 2201, 3879, 2614,
+        530, 2682, 886, 3118, 8865, 1014, 1676, 7091,
+        2856, 4444, 2172, 2143, 2840, 1012, 3330, 696,
+        5765, 6844, 4846, 7521, 1094, 7045, 4112, 3576,
+        1143, 2320, 6924, 5765, 7373, 4298, 582, 2121,
+        1297, 1670, 3350, 3227, 1722, 5765, 9051, 1942,
+        2023, 7064, 3641, 306, 7836, 5060, 1278, 6490,
+        2128, 3595, 363, 2422, 2039, 3793, 5073, 1565,
+        4939, 3693, 152, 5765, 4645, 2403, 8009, 5765,
+        2802, 2090, 4881, 2250, 2090, 1441, 7166, 2200,
+        1818, 4989, 8609, 3735, 4631, 702, 1585, 6728,
+        2809, 7949, 3558, 3552, 3729, 5765, 4302, 6406,
+        7041, 4101, 3780, 5765, 9305, 2521, 1286, 5765,
+        5765, 2802, 4108, 4285, 2016, 1936, 3937, 2796,
+        10510, 5765, 2049, 4936, 6924, 2188, 766, 3752,
+        1356, 8882, 7137, 1696, 10630, 4652, 1054, 1109,
+        2419, 5765, 1175, 7586, 4404, 6612, 3525, 7668,
+        4225, 1986, 1698, 9239, 7, 5765, 6294, 4695,
+        2200, 5765, 2142, 3871, 6804, 5765, 4468, 1595,
+        578, 4941, 6454, 2258, 5765, 1696, 3859, 5765,
+        9033, 3226, 3956, 2268, 4740, 3334, 9225, 3466,
+        1056, 6399, 5765, 5765, 5765, 2963, 4618, 4498,
+        9238, 3186, 5765, 6398, 1782, 9431, 1829, 1065,
+        3614, 9213, 3545, 4387, 1282, 6983, 1008, 1918,
+        5765, 5765, 8601, 1112, 2942, 3510, 2553, 5765,
+        621, 7921, 7971, 3573, 4502, 2819, 5765, 4802,
+        6915, 2718, 8807, 5765, 2737, 5765, 5765, 982,
+        3886, 2747, 506, 10042, 4714, 8348, 5765, 1774,
+        3662, 1122, 6824, 5765, 4453, 3517, 2278, 7921,
+    )
 
 def _baillie_psw(n: int) -> bool:
     """
@@ -3955,14 +3996,20 @@ def small_roots(
     mod : int
         Modulus
     bounds : tuple[int, ...] or None
-        Bound on root size, where |xᵢ| < bounds[i] for each variable xᵢ.
+        Bound on root size, where |xᵢ| < bᵢ for each variable xᵢ.
         Required for multivariate polynomials. For univariate, defaults to M^(1/deg).
     epsilon : float
         Parameter controlling lattice dimension vs root bound trade-off.
         Smaller epsilon allows for larger bounds but requires larger lattice (slower).
+
+    Complexity
+    ----------
+    Brute force path is O(Π(2Bᵢ - 1)) time
+    Lattice path is dominated by LLL on an H × W matrix,
+    about O(H⁵W log³A) time and O(H² + HW) space, where A is the max lattice
     """
-    M = abs(mod)
-    if M == 0: raise ZeroDivisionError("modulus must be nonzero")
+    if (M := abs(mod)) == 0:
+        raise ZeroDivisionError("Modulus must be nonzero")
 
     f = {m: r - M if r > M // 2 else r for m, c in coefficients.items() if (r := c % M)}
     num_variables = _poly_num_variables(f)
@@ -3978,36 +4025,41 @@ def small_roots(
         raise ValueError("bounds required for multivariate instances")
     if bounds and len(bounds) != num_variables:
         raise ValueError("bounds length mismatch")
-    if bounds is None and num_variables == 1:
-        bounds = (iroot(M, degree),)
     if num_variables == 0 or (degree := _poly_degree_total(f)) <= 0:
         return []
+    if bounds is None and num_variables == 1:
+        bounds = (max(2, iroot(M, degree)),)
 
     # If bounds are small enough, brute force the original congruence
-    bounds = tuple(max(2, abs(b)) for b in bounds)
-    roots = _brute_force_polynomial_system([f], bounds, mod=M)
     if (roots := _brute_force_polynomial_system([f], bounds, mod=M)) is not None:
         return roots
 
-    # Build lattice, reduce via LLL, and extract integer relations
-    m, polynomials, basis = _choose_jochemsz_may_params(f, bounds, M, epsilon)
-    lattice, scales, basis_index = _make_coppersmith_lattice(polynomials, basis, bounds)
+    # Build lattice, reduce via LLL, and extract relations satisfying Howgrave-Graham.
     weights = _monomial_weights_from_bounds(bounds)
-    extracted = _extract_coppersmith_relations(lll_reduce(lattice), basis, scales, M**m)
-    selected = _select_coppersmith_polynomials(extracted, weights, basis_index)
+    m, shifts, basis = _choose_jochemsz_may_params(f, bounds, M, epsilon)
+    lattice, scales, basis_index = _make_coppersmith_lattice(shifts, basis, bounds)
+    relations = _extract_coppersmith_relations(lll_reduce(lattice), basis, scales, M**m)
+    hg_relations, other_relations = relations
 
     # Permute variables so smallest bounds come first (better for backtracking)
+    selected = _select_coppersmith_polynomials(hg_relations, weights, basis_index)
     selected, bounds, index = _permute_variables(selected, bounds)
+    unpermute = lambda x: tuple(x[index[i]] for i in range(num_variables))
 
-    # Try solving with increasing numbers of polynomials
-    solutions = []
+    # Try solving with increasing numbers of Howgrave-Graham polynomials
     for k in range(min(2, num_variables), len(selected) + 1):
-        if (solutions := _solve_polynomial_system(selected[:k], bounds)):
-            break
+        solutions = _solve_polynomial_system(selected[:k], bounds)
+        solutions = {x for x in map(unpermute, solutions) if _poly_eval(f, x) % M == 0}
+        if solutions:
+            return sorted(solutions)
 
-    # Unpermute and validate against original modular equation
-    candidates = [tuple(x[index[i]] for i in range(num_variables)) for x in solutions]
-    return sorted({r for r in candidates if _poly_eval(f, r) % M == 0})
+    # Fallback to check roots of individual non-Howgrave-Graham polynomials
+    roots = set()
+    for g in other_relations:
+        solutions = _solve_polynomial_system([g], bounds)
+        roots.update(x for x in map(unpermute, solutions) if _poly_eval(f, x) % M == 0)
+
+    return sorted(roots)
 
 def lll_reduce(B: Matrix[int]) -> Matrix[int]:
     """
@@ -4234,6 +4286,8 @@ def _lll_reduce_block(
 
     # Initial Gram-Schmidt orthogonalization
     mu, bstar, bstar_squared_norm = _gso(B, exact=exact)
+    if not exact and not all(isfinite(x) for x in bstar_squared_norm):
+        raise _PrecisionError("Non-finite norm detected")
 
     # LLL reduction
     i = start + 1
@@ -4264,6 +4318,8 @@ def _lll_reduce_block(
 
         # Precision failure detection (only in float mode)
         if not exact:
+            if not isfinite(bstar_squared_norm[i]):
+                raise _PrecisionError("Non-finite norm detected")
             if bstar_squared_norm[i] < 0:
                 raise _PrecisionError("Negative squared norm detected")
             if any(abs(mu[i][j]) > 0.5 + 1e-9 for j in range(start, i)):
@@ -4288,8 +4344,8 @@ def _lll_reduce_block(
             if any(abs(mu_exact[i][j]) > Fraction(1, 2) for i, j in indices):
                 raise _PrecisionError("Final verification failed: |μ| > 0.5")
 
-    # Pack zero vectors to the front of the reduced block
-    B[start:stop] = sorted(B[start:stop], key=any)
+    # Pack zero vectors to the back of the reduced block
+    B[start:stop] = sorted(B[start:stop], key=any, reverse=True)
 
     return B
 
@@ -4383,7 +4439,7 @@ def _enumerate_svp_block(
         # Pruning coefficients based on Gama-Nguyen-Regev extreme pruning heuristic
         # with 50% success probability (log(2) ≈ 0.693)
         c = 1 + log(2) / block_size
-        pruning_bound = [(1 - i / (block_size - 1)) ** c for i in range(block_size)]
+        pruning_bound = [(1 - i / block_size) ** c for i in range(block_size)]
     else:
         pruning_bound = [1.0] * block_size
     if max_nodes is None:
@@ -4686,9 +4742,11 @@ def _brute_force_polynomial_system(
     to a system of multivariate polynomials fₖ(x) = 0 where x = (x₁, x₂, ...).
     """
     ranges = [range(-b + 1, b) for b in bounds]
-    if not polynomials:
+    if prod(2*b - 1 for b in bounds) > brute_force_limit:
+        return None
+    elif not polynomials:
         return list(itertools.product(*ranges))
-    elif prod(2*b - 1 for b in bounds) <= brute_force_limit:
+    else:
         is_root = lambda f, x: (_poly_eval(f, x, mod) == 0)
         points = itertools.product(*ranges)
         return sorted(x for x in points if all(is_root(f, x) for f in polynomials))
@@ -4760,7 +4818,7 @@ def _build_coppersmith_shifts(
     M: int,
     m: int,
     t: int,
-    max_shifts: int = 250,
+    max_shifts: int = 50000,
 ) -> tuple[list[Polynomial[int]], list[Monomial]]:
     """
     Build shifted polynomials a * f^k * M^(m-k) for the Coppersmith lattice.
@@ -4850,26 +4908,22 @@ def _extract_coppersmith_relations(
     reduced_lattice: list[list[int]],
     basis: list[Monomial],
     scales: list[int],
-    M_pow_m: int,
-    max_extracted: int = 40,
-) -> list[Polynomial[int]]:
+    howgrave_graham_bound: int,
+) -> tuple[list[Polynomial[int]], list[Polynomial[int]]]:
     """
-    Extract polynomials from reduced lattice,
-    prioritizing those satisfying Howgrave-Graham bound.
+    Extract polynomials from reduced lattice.
     """
-    relations, fallback_relations = [], []
+    howgrave_graham_relations, other_relations = [], []
     for row in reduced_lattice:
         f = {m: c // scale for c, m, scale in zip(row, basis, scales) if c}
         f = _poly_make_canonical(f)
-        if f and not (len(f) == 1 and not any(next(iter(f)))):
-            if sum(abs(v) for v in row) < M_pow_m:
-                relations.append(f)
-                if len(relations) >= max_extracted:
-                    break
+        if f and not (len(f) == 1 and not any(next(iter(f)))):  # skip if f is constant
+            if sum(abs(v) for v in row) < howgrave_graham_bound:
+                howgrave_graham_relations.append(f)
             else:
-                fallback_relations.append(f)
+                other_relations.append(f)
 
-    return relations if relations else fallback_relations[:max_extracted]
+    return howgrave_graham_relations, other_relations
 
 def _select_coppersmith_polynomials(
     polynomials: list[Polynomial[int]],
@@ -5393,12 +5447,12 @@ def polynomial(
     Uses Horner's method for polynomial evaluation.
     """
     coefficients = coefficients if mod is None else [c % mod for c in coefficients]
+    reversed_coefficients = coefficients[::-1]
 
-    def horner(x: Number) -> Number:
-        step = (lambda b, a: a + b*x) if mod is None else (lambda b, a: (a + b*x) % mod)
-        return reduce(step, reversed(coefficients), 0)
-
-    return horner
+    if mod is None:
+        return lambda x: reduce(lambda b, a: a + b*x, reversed_coefficients, 0)
+    else:
+        return lambda x: reduce(lambda b, a: (a + b*x) % mod, reversed_coefficients, 0)
 
 def iroot(x: int, n: int) -> int:
     """
