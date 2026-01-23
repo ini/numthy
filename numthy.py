@@ -18,7 +18,7 @@ from collections import Counter, defaultdict, deque
 from collections.abc import Iterable, Sequence
 from fractions import Fraction
 from functools import cache, lru_cache, partial, reduce
-from heapq import heappop, heappush, nsmallest
+from heapq import heappop, heappush
 from math import ceil, fsum, gcd, inf, isfinite, isqrt, lcm, log, prod, sqrt
 from operator import mul, xor
 from typing import Callable, Collection, Iterator, TypeAlias, TypeVar
@@ -48,7 +48,7 @@ __all__ = [
     # Diophantine Equations
     'bezout', 'cornacchia', 'pell', 'conic', 'pythagorean_triples', 'pillai',
     # Lattices
-    'small_roots', 'lll_reduce', 'bkz_reduce', 'closest_vector',
+    'lll_reduce', 'bkz_reduce', 'closest_vector', 'small_roots',
     # Sequences
     'lucas', 'fibonacci', 'fibonacci_index', 'fibonacci_numbers',
     'polygonal', 'polygonal_index', 'polygonal_numbers', 'is_polygonal',
@@ -4000,96 +4000,6 @@ def _pillai_bound(a: int, b: int, c: int) -> int:
 ############################### Lattices ###############################
 ########################################################################
 
-def small_roots(
-    coefficients: Polynomial[int],
-    mod: int,
-    bounds: tuple[int, ...] | None = None,
-    *,
-    epsilon: float = 0.05,
-) -> list[tuple[int, ...]]:
-    """
-    Find small integer roots of a multivariate polynomial f(x₁, x₂, ...) ≡ 0 (mod M).
-
-    Uses the Jochemsz-May multivariate generalization of Coppersmith's method.
-
-    See: https://www.iacr.org/archive/asiacrypt2006/42840270/42840270.pdf
-    See: https://cr.yp.to/bib/2001/howgrave-graham.pdf
-    See: https://link.springer.com/chapter/10.1007/3-540-68339-9_14
-
-    Parameters
-    ----------
-    coefficients : dict[tuple[int, ...], int]
-        Multivariate polynomial with integer coefficients as {monomial: coefficient}
-        where each monomial is a tuple indicating the exponents for each variable
-        (e.g. {(1, 0): 5, (0, 1): 3, (0, 0): -7} represents 5x + 3y - 7)
-    mod : int
-        Modulus
-    bounds : tuple[int, ...] or None
-        Bound on root size, where |xᵢ| < bᵢ for each variable xᵢ.
-        Required for multivariate polynomials. For univariate, defaults to M^(1/deg).
-    epsilon : float
-        Parameter controlling lattice dimension vs root bound trade-off.
-        Smaller epsilon allows for larger bounds but requires larger lattice (slower).
-
-    Complexity
-    ----------
-    Brute force path is O(Π(2Bᵢ - 1)) time
-    Lattice path is dominated by LLL on an H × W matrix,
-    about O(H⁵W log³A) time and O(H² + HW) space, where A is the max lattice
-    """
-    if (M := abs(mod)) == 0:
-        raise ZeroDivisionError("Modulus must be nonzero")
-
-    f = {m: r - M if r > M // 2 else r for m, c in coefficients.items() if (r := c % M)}
-    num_variables = _poly_num_variables(f)
-
-    # Input validation
-    if any(len(monomial) != num_variables for monomial in f):
-        raise ValueError("Inconsistent monomial tuple lengths")
-    if any(not isinstance(e, int) or e < 0 for monomial in f for e in monomial):
-        raise ValueError("Exponents must be nonnegative integers")
-    if epsilon <= 0:
-        raise ValueError("epsilon must be > 0")
-    if bounds is None and num_variables > 1:
-        raise ValueError("bounds required for multivariate instances")
-    if bounds and len(bounds) != num_variables:
-        raise ValueError("bounds length mismatch")
-    if num_variables == 0 or (degree := _poly_degree(f)) <= 0:
-        return []
-    if bounds is None and num_variables == 1:
-        bounds = (max(2, iroot(M, degree)),)
-
-    # If bounds are small enough, brute force the original congruence
-    if (roots := _brute_force_polynomial_system([f], bounds, mod=M)) is not None:
-        return roots
-
-    # Build lattice, reduce via LLL, and extract relations satisfying Howgrave-Graham.
-    weights = _monomial_weights_from_bounds(bounds)
-    m, shifts, basis = _choose_jochemsz_may_params(f, bounds, M, epsilon)
-    lattice, scales, basis_index = _make_coppersmith_lattice(shifts, basis, bounds)
-    relations = _extract_coppersmith_relations(lll_reduce(lattice), basis, scales, M**m)
-    hg_relations, other_relations = relations
-
-    # Permute variables so smallest bounds come first (better for backtracking)
-    selected = _select_coppersmith_polynomials(hg_relations, weights, basis_index)
-    selected, bounds, index = _permute_variables(selected, bounds)
-    unpermute = lambda x: tuple(x[index[i]] for i in range(num_variables))
-
-    # Try solving with increasing numbers of Howgrave-Graham polynomials
-    for k in range(min(2, num_variables), len(selected) + 1):
-        solutions = _solve_polynomial_system(selected[:k], bounds)
-        solutions = {x for x in map(unpermute, solutions) if _poly_eval(f, x) % M == 0}
-        if solutions:
-            return sorted(solutions)
-
-    # Fallback to check roots of individual non-Howgrave-Graham polynomials
-    roots = set()
-    for g in other_relations:
-        solutions = _solve_polynomial_system([g], bounds)
-        roots.update(x for x in map(unpermute, solutions) if _poly_eval(f, x) % M == 0)
-
-    return sorted(roots)
-
 def lll_reduce(B: Matrix[int]) -> Matrix[int]:
     """
     Lenstra-Lenstra-Lovász (LLL) lattice basis reduction.
@@ -4207,6 +4117,96 @@ def closest_vector(B: Matrix[int], target: Vector[int]) -> Vector[int]:
 
     # Reconstruct lattice vector from integer coefficients
     return [sum(c * b_i[j] for c, b_i in zip(coeffs, B) if c) for j in range(dim)]
+
+def small_roots(
+    coefficients: Polynomial[int],
+    mod: int,
+    bounds: tuple[int, ...] | None = None,
+    *,
+    epsilon: float = 0.05,
+) -> list[tuple[int, ...]]:
+    """
+    Find small integer roots of a multivariate polynomial f(x₁, x₂, ...) ≡ 0 (mod M).
+
+    Uses the Jochemsz-May multivariate generalization of Coppersmith's method.
+
+    See: https://www.iacr.org/archive/asiacrypt2006/42840270/42840270.pdf
+    See: https://cr.yp.to/bib/2001/howgrave-graham.pdf
+    See: https://link.springer.com/chapter/10.1007/3-540-68339-9_14
+
+    Parameters
+    ----------
+    coefficients : dict[tuple[int, ...], int]
+        Multivariate polynomial with integer coefficients as {monomial: coefficient}
+        where each monomial is a tuple indicating the exponents for each variable
+        (e.g. {(1, 0): 5, (0, 1): 3, (0, 0): -7} represents 5x + 3y - 7)
+    mod : int
+        Modulus
+    bounds : tuple[int, ...] or None
+        Bound on root size, where |xᵢ| < bᵢ for each variable xᵢ.
+        Required for multivariate polynomials. For univariate, defaults to M^(1/deg).
+    epsilon : float
+        Parameter controlling lattice dimension vs root bound trade-off.
+        Smaller epsilon allows for larger bounds but requires larger lattice (slower).
+
+    Complexity
+    ----------
+    Brute force path is O(Π(2Bᵢ - 1)) time
+    Lattice path is dominated by LLL on an H × W matrix,
+    about O(H⁵W log³A) time and O(H² + HW) space, where A is the max lattice
+    """
+    if (M := abs(mod)) == 0:
+        raise ZeroDivisionError("Modulus must be nonzero")
+
+    f = {m: r - M if r > M // 2 else r for m, c in coefficients.items() if (r := c % M)}
+    num_variables = _poly_num_variables(f)
+
+    # Input validation
+    if any(len(monomial) != num_variables for monomial in f):
+        raise ValueError("Inconsistent monomial tuple lengths")
+    if any(not isinstance(e, int) or e < 0 for monomial in f for e in monomial):
+        raise ValueError("Exponents must be nonnegative integers")
+    if epsilon <= 0:
+        raise ValueError("epsilon must be > 0")
+    if bounds is None and num_variables > 1:
+        raise ValueError("bounds required for multivariate instances")
+    if bounds and len(bounds) != num_variables:
+        raise ValueError("bounds length mismatch")
+    if num_variables == 0 or (degree := _poly_degree(f)) <= 0:
+        return []
+    if bounds is None and num_variables == 1:
+        bounds = (max(2, iroot(M, degree)),)
+
+    # If bounds are small enough, brute force the original congruence
+    if (roots := _brute_force_polynomial_system([f], bounds, mod=M)) is not None:
+        return roots
+
+    # Build lattice, reduce via LLL, and extract relations satisfying Howgrave-Graham.
+    weights = _monomial_weights_from_bounds(bounds)
+    m, shifts, basis = _choose_jochemsz_may_params(f, bounds, M, epsilon)
+    lattice, scales, basis_index = _make_coppersmith_lattice(shifts, basis, bounds)
+    relations = _extract_coppersmith_relations(lll_reduce(lattice), basis, scales, M**m)
+    hg_relations, other_relations = relations
+
+    # Permute variables so smallest bounds come first (better for backtracking)
+    selected = _select_coppersmith_polynomials(hg_relations, weights, basis_index)
+    selected, bounds, index = _permute_variables(selected, bounds)
+    unpermute = lambda x: tuple(x[index[i]] for i in range(num_variables))
+
+    # Try solving with increasing numbers of Howgrave-Graham polynomials
+    for k in range(min(2, num_variables), len(selected) + 1):
+        solutions = _solve_polynomial_system(selected[:k], bounds)
+        solutions = {x for x in map(unpermute, solutions) if _poly_eval(f, x) % M == 0}
+        if solutions:
+            return sorted(solutions)
+
+    # Fallback to check roots of individual non-Howgrave-Graham polynomials
+    roots = set()
+    for g in other_relations:
+        solutions = _solve_polynomial_system([g], bounds)
+        roots.update(x for x in map(unpermute, solutions) if _poly_eval(f, x) % M == 0)
+
+    return sorted(roots)
 
 def _nearest_int(q: Real) -> int:
     """
@@ -4835,7 +4835,6 @@ def _build_coppersmith_shifts(
     M: int,
     m: int,
     t: int,
-    max_shifts: int = 50000,
 ) -> tuple[list[Polynomial[int]], list[Monomial]]:
     """
     Build shifted polynomials a * f^k * M^(m-k) for the Coppersmith lattice.
@@ -4869,7 +4868,7 @@ def _build_coppersmith_shifts(
 
     # Keep shifts with smallest estimated row norms, collect monomials into sorted basis
     wdeg = lambda m: sum(w * e for w, e in zip(weights, m))  # weighted monomial degree
-    shifted_polynomials = nsmallest(max_shifts, generate_polynomials(), key=norm)
+    shifted_polynomials = sorted(generate_polynomials(), key=norm)
     key = lambda m: (wdeg(m), sum(m), m)
     monomial_basis = sorted(set().union(*shifted_polynomials), key=key)
 
@@ -4905,7 +4904,7 @@ def _make_coppersmith_lattice(
     shifted_polynomials: list[Polynomial[int]],
     monomial_basis: list[Monomial],
     bounds: tuple[int, ...],
-) -> tuple[list[list[int]], list[int], Polynomial[int]]:
+) -> tuple[Matrix[int], list[int], Polynomial[int]]:
     """
     Construct scaled lattice matrix from shifted polynomials and monomial basis,
     where each row is a polynomial and columns are monomials.
@@ -4921,7 +4920,7 @@ def _make_coppersmith_lattice(
     return lattice, scales, basis_index
 
 def _extract_coppersmith_relations(
-    reduced_lattice: list[list[int]],
+    reduced_lattice: Matrix[int],
     basis: list[Monomial],
     scales: list[int],
     howgrave_graham_bound: int,
@@ -4955,6 +4954,23 @@ def _select_coppersmith_polynomials(
     unique = list({tuple(sorted(f.items())): f for f in polynomials}.values())
     unique.sort(key=lambda f: (degree(f), len(f), max(map(abs, f.values()))))
 
+    # In-place reduction against the given pivots, where pivots[col] = pivot_row
+    def reduce_vector(v: Vector[int], pivots: dict[int, int], mod: int) -> int | None:
+        # Gaussian elimination against existing pivots
+        for pivot_col in sorted(pivots):
+            if v[pivot_col] == 0: continue
+            pivot_row = pivots[pivot_col]
+            if (factor := (v[pivot_col] * pow(pivot_row[pivot_col], -1, mod)) % mod):
+                for col in range(pivot_col, len(v)):
+                    v[col] = (v[col] - factor * pivot_row[col]) % mod
+
+        # Find new pivot position and normalize
+        for col, a in enumerate(v):
+            if a % mod:
+                inv = pow(a, -1, mod)
+                v[col:] = [(v[k] * inv) % mod for k in range(col, len(v))]
+                return col
+
     # Select linearly independent polynomials via (modular) row reduction
     selected_polynomials, pivots, dim, mod = [], {}, len(basis_index), 2147483647
     for f in unique:
@@ -4962,35 +4978,11 @@ def _select_coppersmith_polynomials(
         v = [0] * dim
         for monomial, coefficient in f.items():
             v[basis_index[monomial]] = coefficient % mod
-        if (result := _reduce_vector(v, pivots, mod)):
-            pivots[result[0]] = result[1]
+        if (pivot_col := reduce_vector(v, pivots, mod)) is not None:
+            pivots[pivot_col] = v
             selected_polynomials.append(f)
 
     return selected_polynomials
-
-def _reduce_vector(
-    v: list[int],
-    pivots: dict[int, list[int]],
-    mod: int,
-) -> tuple[int, list[int]] | None:
-    """
-    Reduce vector against the given pivots, where pivots[col] = pivot_row.
-    Return (pivot_col, reduced_vector) if independent, None if dependent.
-    """
-    # Gaussian elimination against existing pivots
-    for pivot_col in sorted(pivots):
-        if v[pivot_col] == 0: continue
-        pivot_row = pivots[pivot_col]
-        if (factor := (v[pivot_col] * pow(pivot_row[pivot_col], -1, mod)) % mod):
-            for j in range(pivot_col, len(v)):
-                v[j] = (v[j] - factor * pivot_row[j]) % mod
-
-    # Find new pivot position and normalize
-    for j, a in enumerate(v):
-        if a % mod:
-            inv = pow(a, -1, mod)
-            v[j:] = [(v[k] * inv) % mod for k in range(j, len(v))]
-            return (j, v)
 
 
 
