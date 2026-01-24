@@ -259,7 +259,7 @@ def primes(
 
 def count_primes(x: int) -> int:
     """
-    Prime counting function π(x). Returns the number of primes p <= x.
+    Prime counting function π(x). Returns the number of primes p ≤ x.
 
     Uses the Lagarias-Miller-Odlyzko (LMO) extension of the Meissel-Lehmer algorithm.
 
@@ -283,7 +283,7 @@ def sum_primes(
     f_prefix_sum: Callable[[int], Number] | None = None,
 ) -> Number:
     """
-    Compute F(x) as the sum of f(p) over all primes p <= x,
+    Compute F(x) as the sum of f(p) over all primes p ≤ x,
     where f is a completely multiplicative function (by default, f(n) = n).
 
     Uses a generalized version of the LMO prime counting algorithm.
@@ -298,7 +298,7 @@ def sum_primes(
         Completely multiplicative function f(n),
         where f(1) = 1 and f(ab) = f(a) * f(b) for all a, b > 0
     f_prefix_sum : Callable(int) -> Number
-        Function to compute the cumulative sum Σ_{1 <= k <= n} f(k)
+        Function to compute the cumulative sum Σ_{1 ≤ k ≤ n} f(k)
     """
     if f is None and f_prefix_sum is None:
         if x < 10000:
@@ -533,11 +533,11 @@ def _lmo(
     See: https://arxiv.org/pdf/2111.15545
 
     Also includes a generalized version that calculates the sum F(x) = Σ f(p)
-    for all primes p <= x, where f is any arbitrary completely multiplicative function.
+    for all primes p ≤ x, where f is any arbitrary completely multiplicative function.
 
     The generalized LMO sub-expressions become:
 
-        P₂ = Σ f(p) * [F(x/p) − F(p − 1)] for y < p <= sqrt(x)
+        P₂ = Σ f(p) * [F(x/p) − F(p − 1)] for y < p ≤ sqrt(x)
         φ_f(x, a) = φ_f(x, a - 1) - f(pₐ) * φ_f(x/pₐ, a - 1)
         S₁ = Σ μ(n) f(n) φ_f(x/n, k) over ordinary leaves (n, k)
         S₂ = Σ μ(n) f(n) φ_f(x/n, b) over special leaves (n, b)
@@ -602,7 +602,7 @@ def _lmo_p2(
     """
     Compute P2(x, a) from the LMO algorithm.
 
-    This is the prefix sum Σ f(n) over all n <= x with exactly 2 prime factors,
+    This is the prefix sum Σ f(n) over all n ≤ x with exactly 2 prime factors,
     both greater than p_a.
     """
     sqrt_x = isqrt(x)
@@ -865,7 +865,7 @@ def _fenwick_tree_update_path(index: int, tree_size: int) -> tuple[int, ...]:
 def _phi_prime_count(x: int, a: int, small_primes: tuple[int, ...]) -> int:
     """
     Evaluate Legendre's partial sieve function φ(x, a),
-    which counts the number of positive integers <= x coprime to the first a primes.
+    which counts the number of positive integers ≤ x coprime to the first a primes.
     """
     if a == 0:
         return x
@@ -893,7 +893,7 @@ def _phi_prime_count_offsets(d: int) -> tuple[int, ...]:
 def _phi_prime_sum(x: int, a: int, small_primes: tuple[int, ...]) -> int:
     """
     Evaluate Legendre's partial sieve function φ_f(x, a) for f(n) = n,
-    which gives the sum of positive integers <= x coprime to the first a primes.
+    which gives the sum of positive integers ≤ x coprime to the first a primes.
     """
     if a == 0:
         return x * (x + 1) // 2  # sum of all integers <= x
@@ -918,7 +918,7 @@ def _phi_prime_sum_offsets(d: int) -> tuple[tuple[int, int], ...]:
     Compute cumulative counts/sums for the weighted Legendre partial sieve function
     with f(n) = n. Returns offsets[r] = (φ(r, a), φ_f(r, a)) for r = 0, 1 ... d - 1,
     where d is the product of the first a primes, φ(r, a) counts and φ_f(r, a) sums
-    integers <= r coprime to the first a primes.
+    integers ≤ r coprime to the first a primes.
     """
     is_coprime = _coprime_range(d)
     counts = itertools.accumulate(is_coprime)
@@ -1397,7 +1397,7 @@ def _ecm_suyama_curve(
 @small_cache
 def _ecm_prime_powers(B1: int) -> tuple[int, ...]:
     """
-    Precompute prime powers p^e <= B1 for ECM stage 1.
+    Precompute prime powers p^e ≤ B1 for ECM stage 1.
     Cached because ECM is often called repeatedly with the same bounds.
     """
     return tuple(p**ilog(B1, p) for p in primes(high=B1))
@@ -1412,7 +1412,7 @@ def _ecm_stage_2_plan(
 
     Represents each prime r in (B1, B2] as r = kD ± offset, where D ≈ √B2
     is the "giant step" size, k indicates which multiple of D is closest to r,
-    and offset is the distance from r to that multiple (0 <= offset <= D/2).
+    and offset is the distance from r to that multiple (0 ≤ offset ≤ D/2).
 
     Returns
     -------
@@ -1617,7 +1617,7 @@ def _siqs(
 
 def _build_factor_base(n: int, B: int) -> list[tuple[int, float, int]]:
     """
-    Build factor base of primes p <= B where for each prime p,
+    Build factor base of primes p ≤ B where for each prime p,
     n is a quadratic residue mod p.
     """
     factor_base = [(2, log(2), 1)] if n % 2 != 0 and B >= 2 else []
@@ -1688,7 +1688,7 @@ def _gen_polynomials(
         # Shift b-values closer to √n for more efficient sieving (i.e. |Q(x)| small)
         shift = lambda b: b + A * ((sqrt_n - b) // A)
 
-        # Enumerate all 2^(k-1) sign combinations via Gray code
+        # Enumerate all 2^(k-1) sign combinations via Gray code (first sign is fixed)
         b = sum(B) % A  # base solution
         yield (A, shift(b), A_inverses)
         for i in range(1, 1 << (k - 1)):
@@ -1708,7 +1708,7 @@ def _byte_subtraction_table(d: int) -> bytes:
 def _byte_threshold_table(threshold: int) -> bytes:
     """
     Translation table for threshold filtering.
-    Maps byte v to True if v <= threshold, otherwise to False.
+    Maps byte v to True if v ≤ threshold, otherwise to False.
     """
     return bytes(True if v <= threshold else False for v in range(256))
 
@@ -2258,7 +2258,7 @@ def coprimes(n: int) -> Iterator[int]:
 
     Complexity
     ----------
-    O(n * ω(n)) time and O(n) space for n <= 10⁷ (sieve approach).
+    O(n * ω(n)) time and O(n) space for n ≤ 10⁷ (sieve approach).
     O(n log n) time and O(1) space for n > 10⁷ (gcd approach).
     """
     if n < 1:
@@ -3529,7 +3529,7 @@ def pythagorean_triples(
     Generate positive integer solutions to the equation a² + b² = c².
 
     Uses Euclid's formula to generate unique Pythagorean triples (a, b, c)
-    where a <= b <= c.
+    where a ≤ b ≤ c.
 
     If no bounds are specified, infinitely generates triples in order of increasing c.
     When bounds are specified, no order is guaranteed.
@@ -3537,9 +3537,9 @@ def pythagorean_triples(
     Parameters
     ----------
     max_c : float
-        Upper bound for c in generated triples, where c <= max_c
+        Upper bound for c in generated triples, where c ≤ max_c
     max_sum : float
-        Upper bound for the sum of generated triples, where a + b + c <= max_sum
+        Upper bound for the sum of generated triples, where a + b + c ≤ max_sum
     """
     max_m = None
     if max_c is not None:
@@ -3927,7 +3927,7 @@ def _integer_quadratic_roots(A: int, B: int, C: int) -> list[int]:
 def _euclid(max_m: int | None = None) -> Iterator[tuple[int, int, int]]:
     """
     Generate unique primitive Pythagorean triples (a, b, c) with Euclid's formula,
-    where a <= b <= c.
+    where a ≤ b ≤ c.
     """
     for m in (itertools.count(start=2) if max_m is None else range(2, max_m + 1)):
         for n in coprimes(m):
@@ -3941,7 +3941,7 @@ def _euclid(max_m: int | None = None) -> Iterator[tuple[int, int, int]]:
 def _berggren() -> Iterator[tuple[int, int, int]]:
     """
     Generate primitive Pythagorean triples (a, b, c) with Berggren's tree method,
-    where a <= b <= c, and triples are generated in order of increasing c.
+    where a ≤ b ≤ c, and triples are generated in order of increasing c.
     """
     triples = [(5, 3, 4)]
     while triples:
@@ -4004,9 +4004,10 @@ def lll_reduce(B: Matrix[int]) -> Matrix[int]:
     """
     Lenstra-Lenstra-Lovász (LLL) lattice basis reduction.
 
-    Returns a reduced basis with shorter, more orthogonal vectors,
-    where |b₁| ≤ 2^((n-1)/2) * λ₁(L) and the Lovász condition holds:
-    δ‖b*_k‖² ≤ ‖b*_{k+1}‖² + μ_{k+1,k}² ‖b*_k‖².
+    Returns a reduced basis with shorter, more orthogonal vectors, satisfying:
+
+        Size-reduction: |μ_{i,j}| ≤ 0.5 for all i > j
+        Lovász condition: δ‖b*_k‖² ≤ ‖b*_{k+1}‖² + μ_{k+1,k}² ‖b*_k‖²
 
     Uses floating-point arithmetic for speed, with automatic escalation
     to exact rational arithmetic if precision issues are detected.
@@ -4665,7 +4666,7 @@ def _permute_variables(
     bounds = tuple(bounds[i] for i in permutation)
     return polynomials, bounds, {j: i for i, j in enumerate(permutation)}
 
-def _apply_value(
+def _poly_apply_value(
     polynomials: list[Polynomial[int]],
     variable_index: int,
     value: int,
@@ -4819,7 +4820,7 @@ def _solve_polynomial_system(
     # Substitute x_i = v for our chosen variable over each of the potential values
     solutions = set()
     for value in values:
-        if (next_polynomials := _apply_value(polynomials, i, value)) is not None:
+        if (next_polynomials := _poly_apply_value(polynomials, i, value)) is not None:
             for sol in _solve_polynomial_system(
                 next_polynomials,
                 bounds[:i] + bounds[i + 1:],  # remove i-th bound
@@ -5155,7 +5156,7 @@ def polygonal(s: int, i: int) -> int:
 def polygonal_index(s: int, n: int) -> int:
     """
     Find the index of n in the s-gonal numbers.
-    Returns the largest integer i such that P(s, i) <= n.
+    Returns the largest integer i such that P(s, i) ≤ n.
     """
     if n < 0:
         raise ValueError("n must be a non-negative integer")
@@ -5460,7 +5461,7 @@ def polynomial(
 def iroot(x: int, n: int) -> int:
     """
     Find the integer n-th root of x.
-    Returns the largest integer a such that a^n <= x.
+    Returns the largest integer a such that a^n ≤ x.
     Uses Newton's method.
     """
     # Handle special cases
@@ -5491,7 +5492,7 @@ def iroot(x: int, n: int) -> int:
 def ilog(a: int, b: int = 2) -> int:
     """
     Find the integer logarithm of a with base b.
-    Returns the largest integer n such that b^n <= a.
+    Returns the largest integer n such that b^n ≤ a.
     Uses repeated squaring and binary search.
     """
     if a < 1 or b < 2:
@@ -5581,7 +5582,7 @@ def _threshold_select(
 ) -> int:
     """
     Select result based on threshold ranges.
-    Returns result for the smallest (threshold, result) pair where value <= threshold.
+    Returns result for the smallest (threshold, result) pair where value ≤ threshold.
     If value exceeds all thresholds, returns default.
 
     Parameters
