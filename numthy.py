@@ -47,6 +47,8 @@ __all__ = [
     'hensel', 'discrete_log', 'modular_roots',
     # Diophantine Equations
     'bezout', 'cornacchia', 'pell', 'conic', 'pythagorean_triples', 'pillai',
+    # Algebraic Systems
+    'linear_solve', 'polynomial_solve',
     # Lattices
     'lll_reduce', 'bkz_reduce', 'closest_vector', 'small_roots',
     # Sequences
@@ -66,8 +68,8 @@ Number: TypeAlias = int | float | complex | Fraction
 Real: TypeAlias = int | float | Fraction
 Vector: TypeAlias = list[_T]
 Matrix: TypeAlias = list[list[_T]]
-Monomial = tuple[int, ...]
-Polynomial = dict[Monomial, _T]
+Monomial: TypeAlias = tuple[int, ...]
+Polynomial: TypeAlias = dict[Monomial, _T]
 singleton = lru_cache(maxsize=1)
 small_cache = lru_cache(maxsize=1024)
 large_cache = lru_cache(maxsize=1048576)
@@ -1688,7 +1690,7 @@ def _gen_polynomials(
         # Shift b-values closer to √n for more efficient sieving (i.e. |Q(x)| small)
         shift = lambda b: b + A * ((sqrt_n - b) // A)
 
-        # Enumerate all 2^(k-1) sign combinations via Gray code (first sign is fixed)
+        # Enumerate all 2^(k-1) sign combinations via Gray code (1st sign is fixed)
         b = sum(B) % A  # base solution
         yield (A, shift(b), A_inverses)
         for i in range(1, 1 << (k - 1)):
@@ -2091,7 +2093,7 @@ def valuation(n: int, p: int) -> int:
     # For general p, use doubling to achieve O(log v) divisions
     # Build powers p, p^2, p^4, p^8, ... while p^(2^k) <= n
     powers = [(p, 1)]
-    power, exponent = 1
+    power, exponent = 1, 1
     while (power := power * power) <= n:
         powers.append((power, exponent := 2*exponent))
 
@@ -3997,6 +3999,622 @@ def _pillai_bound(a: int, b: int, c: int) -> int:
 
 
 ########################################################################
+########################## Algebraic Systems  ##########################
+########################################################################
+
+def linear_solve(
+    A: Matrix[int],
+    b: Vector[int] | None = None,
+    *,
+    nullspace: bool = False,
+) -> tuple[Vector[int] | None, list[Vector[int]] | None]:
+    """
+    Find integer solutions to the system of linear equations given by Ax = b.
+
+    Parameters
+    ----------
+    A : Matrix[int]
+        M x N matrix, with M equations of N variables
+    b : Vector[int]
+        Target vector of length M
+    nullspace : bool
+        Whether or not compute and return a basis for the null space
+
+    Returns
+    -------
+    solution : Vector[int] or None
+        Particular solution x such that Ax = b, or None if no solution exists
+    nullspace_basis : list[Vector[int]] or None
+        List of basis vectors for null space, or None if nullspace=False
+    """
+    num_rows = len(A) if A else 0
+    num_cols = len(A[0]) if A and A[0] else 0
+    if num_rows == 0 or num_cols == 0:
+        return ([], None) if b is None or not any(b) else (None, None)
+
+    # Input validation
+    if any(len(row) != num_cols for row in A):
+        raise ValueError("Ragged matrix")
+    if b is not None and len(b) != num_rows:
+        raise ValueError("Dimension mismatch")
+
+    # Each row's GCD must divide the corresponding b entry
+    b = [0] * num_rows if b is None else b
+    for row, b_i in zip(A, b):
+        g = gcd(*row)
+        if (g == 0 and b_i != 0) or (g != 0 and b_i % g != 0):
+            return (None, [] if nullspace else None)
+
+    # Try Bareiss for square matrices
+    if not nullspace and num_rows == num_cols:
+        x = _bareiss(A, b)
+        if x is not None and _verify_linear_system(A, x, b):
+            return (x, None)
+
+    # Try modular approach for square / tall matrices
+    # Use Hadamard bound: n × n matrix with entries <= K has det <= n^(n/2) * K^n
+    if not nullspace and num_rows >= num_cols:
+        max_abs = max(abs(v) for row in A for v in row)
+        max_abs = max(max_abs, max(map(abs, b)))
+        dim = min(num_rows, num_cols)
+        hadamard_bits = dim * ((isqrt(dim) + 1).bit_length() + max_abs.bit_length())
+        x = _linear_solve_modular(A, b, max(64, hadamard_bits + 10))
+        if x is not None:
+            return (x, None)
+
+    # Fallback to HNF approach
+    transpose = lambda M: [list(col) for col in zip(*M)]
+    HT, UT = _hermite_normal_form(transpose(A))
+
+    # Compute nullspace (columns of U past the rank = rows of UT)
+    rank = next((r for r in range(len(HT)) if not any(HT[r])), len(HT))
+    nullspace_basis = [UT[r] for r in range(rank, len(UT))]
+    if not any(b):
+        return ([0] * num_cols, nullspace_basis)
+
+    # Find pivots
+    H, U = transpose(HT), transpose(UT)
+    pivots = []
+    for col in range(num_cols):
+        pivot_rows = {p[0] for p in pivots}
+        non_pivot_rows = (r for r in range(num_rows) if r not in pivot_rows)
+        row = next((r for r in non_pivot_rows if H[r][col]), None)
+        if row is None: break
+        pivots.append((row, col))
+
+    # Solve H @ y = b via back substitution
+    y = [0] * num_cols
+    for row, col in pivots:
+        numerator = b[row] - sum(H[row][c] * y[c] for c in range(col))
+        y[col], remainder = divmod(numerator, H[row][col])
+        if remainder:
+            return (None, nullspace_basis if nullspace else None)
+
+    # Check consistency for non-pivot rows
+    pivot_rows = {row for row, _ in pivots}
+    for row in range(num_rows):
+        if row not in pivot_rows:
+            if sum(H[row][c] * y[c] for c in range(num_cols)) != b[row]:
+                return (None, nullspace_basis if nullspace else None)
+
+    # Recover x = U @ y
+    x = [sum(U[r][c] * y[c] for c in range(num_cols)) for r in range(num_cols)]
+
+    # Size-reduce x using nullspace basis via coordinate descent
+    if nullspace_basis and max(map(int.bit_length, x)) > 1000:
+        norm = lambda v: sum(vi * vi for vi in v)
+        best_x, best_norm, improved = x.copy(), norm(x), True
+        while improved:
+            improved = False
+            for i in range(len(x)):
+                for v in nullspace_basis:
+                    if v[i] and (scale := x[i] // v[i]):
+                        x = [x_i - scale * k_i for x_i, k_i in zip(x, v)]
+                        if (x_norm := norm(x)) < best_norm:
+                            best_x, best_norm, improved = x.copy(), x_norm, True
+                        break
+        x = best_x
+
+    return (x, nullspace_basis if nullspace else None)
+
+def polynomial_solve(
+    polynomials: list[Polynomial[int]],
+    bounds: tuple[int, ...],
+) -> tuple[tuple[int, ...], ...]:
+    """
+    Find integer solutions to a system of multivariate polynomial equations
+    f₁(x₁, x₂, ...) = f₂(x₁, x₂, ...) = ... = fₖ(x₁, x₂, ...) = 0,
+    where |xᵢ| < bounds[i] for each variable.
+
+    Polynomials are represented as dictionaries mapping monomial tuples to coefficients,
+    e.g. {(2, 0): 3, (0, 1): -5, (0, 0): 7} represents 3x² - 5y + 7.
+
+    Not guaranteed to find *all* solutions for large bounds.
+
+    Parameters
+    ----------
+    polynomials : list[dict[tuple[int, ...], int]]
+        System of multivariate polynomials with integer coefficients
+    bounds : tuple[int, ...]
+        Bounds on solution size, where |xᵢ| < bounds[i] for each variable
+
+    Returns
+    -------
+    tuple[tuple[int, ...], ...]
+        Integer solutions within the given bounds, sorted lexicographically
+    """
+    # Permute variables so smallest bounds come first (better for backtracking)
+    polynomials, bounds, index = _permute_variables(polynomials, bounds)
+    unpermute = lambda x: tuple(x[index[i]] for i in range(len(bounds)))
+    solutions = _solve_polynomial_system(polynomials, bounds)
+    return tuple(sorted(map(unpermute, solutions)))
+
+def _verify_linear_system(A: Matrix, x: Vector, b: Vector) -> bool:
+    """
+    Verify the matrix equation Ax = b.
+    """
+    return all(sum(a * xi for a, xi in zip(row, x)) == bi for row, bi in zip(A, b))
+
+def _bareiss(A: Matrix[int], b: Vector[int]) -> list[int] | None:
+    """
+    Use the Bareiss algorithm to find an integer solution to Ax = b for square matrix A.
+
+    See: https://www.jstor.org/stable/2004533
+
+    Complexity
+    ----------
+    O(n³) operations
+    """
+    n = len(A)
+    M = [row.copy() + [b_i] for row, b_i in zip(A, b)]  # augmented matrix
+
+    # Gaussian elimination
+    prev_pivot = 1
+    for i in range(n):
+        # Find non-zero pivot in current column
+        row = next((r for r in range(i, n) if M[r][i]), None)
+        if row is None:
+            return None
+        if row != i:
+            M[i], M[row] = M[row], M[i]
+
+        # Zero out all entries below pivot in current column
+        pivot = M[i][i]
+        for r in range(i + 1, n):
+            if (factor := M[r][i]):
+                for c in range(i, n + 1):
+                    M[r][c] = (M[r][c] * pivot - M[i][c] * factor) // prev_pivot
+
+        prev_pivot = pivot
+
+    # Back substitution
+    x = [0] * n
+    for i in range(n - 1, -1, -1):
+        numerator = M[i][-1] - sum(M[i][c] * x[c] for c in range(i + 1, n))
+        x[i], remainder = divmod(numerator, M[i][i])
+        if remainder:
+            return None
+
+    return x
+
+def _linear_solve_mod_p(A: Matrix[int], b: Vector[int], p: int) -> list[int] | None:
+    """
+    Solve Ax ≡ b (mod p) using Gaussian elimination over Z/pZ.
+    Returns solution vector x with 0 ≤ xᵢ < p, or None if no solution exists.
+
+    Complexity
+    ----------
+    O(MN²) operations for an M × N matrix
+    """
+    num_rows, num_cols = len(A), len(A[0])
+    M = [[a % p for a in row] + [b_i % p] for row, b_i in zip(A, b)]  # augmented matrix
+
+    # Gaussian elimination
+    pivot_row, pivot_cols = 0, []
+    for col in range(num_cols):
+        # Find non-zero pivot in current column
+        row = next((r for r in range(pivot_row, num_rows) if M[r][col]), None)
+        if row is None: continue
+        if row != pivot_row:
+            M[pivot_row], M[row] = M[row], M[pivot_row]
+
+        # Normalize pivot row
+        inv = pow(M[pivot_row][col], -1, p)
+        for c in range(col, num_cols + 1):
+            M[pivot_row][c] = (M[pivot_row][c] * inv) % p
+
+        # Zero out all entries below pivot in current column
+        for r in range(pivot_row + 1, num_rows):
+            if (factor := M[r][col]):
+                for c in range(col, num_cols + 1):
+                    M[r][c] = (M[r][c] - factor * M[pivot_row][c]) % p
+
+        pivot_cols.append(col)
+        pivot_row += 1
+
+    # Check for inconsistent zero row with nonzero right-most column
+    if any(M[r][-1] and not any(M[r][:-1]) for r in range(num_rows)):
+        return None
+
+    # Back substitution
+    x = [0] * num_cols
+    for r in range(len(pivot_cols) - 1, -1, -1):
+        col = pivot_cols[r]
+        x[col] = (M[r][-1] - sum(M[r][c] * x[c] for c in range(col + 1, num_cols))) % p
+
+    return x
+
+def _linear_solve_modular(
+    A: Matrix[int],
+    b: Vector[int],
+    max_bits: int,
+) -> list[int] | None:
+    """
+    Solve Ax ≡ b (mod p) modulo multiple primes p, and combine solutions via CRT.
+    Returns solution vector x, or None if no solution was found.
+    """
+    x_mod = [0] * len(A[0])
+    p, mod = 1, 1
+    while mod.bit_length() < max_bits:
+        # Solve Ax = b (mod p) for random 32-bit prime
+        while mod % p == 0:
+            p = random_prime(32)
+        if (solution := _linear_solve_mod_p(A, b, p)) is None:
+            return None  # inconsistent mod p implies inconsistent over Z
+
+        # Combine with running solution via Chinese Remainder Theorem
+        inv = pow(mod, -1, p)
+        x_mod = [x + ((y - x) * inv % p) * mod for x, y in zip(x_mod, solution)]
+        mod *= p
+
+        # Check for global solution to Ax = b 
+        x = [value - mod if value > mod // 2 else value for value in x_mod]
+        if _verify_linear_system(A, x, b):
+            return x
+    
+    return None
+
+def _hermite_normal_form(A: Matrix[int]) -> tuple[list[list[int]], list[list[int]]]:
+    """
+    Compute the (row) Hermite normal form for the given matrix.
+    Returns (H, U) where H is an upper triangular matrix H in row Hermite normal form,
+    and U is a unimodular transform such that H = UA.
+
+    Complexity
+    ----------
+    O(MN² log(K)) operations for an M × N matrix, where K is the size of the max entry
+    """
+    num_rows, num_cols = len(A), len(A[0])
+    H = [row.copy() for row in A]
+    U = [[int(r == c) for c in range(num_rows)] for r in range(num_rows)]
+
+    pivots = []
+    for col in range(num_cols):
+        # Find non-zero pivot in current column
+        row = next((r for r in range(len(pivots), num_rows) if H[r][col]), None)
+        if row is None: continue
+        pivot_row = len(pivots)
+        if pivot_row != row:
+            H[pivot_row], H[row] = H[row], H[pivot_row]
+            U[pivot_row], U[row] = U[row], U[pivot_row]
+
+        # Zero out all entries below pivot in current column
+        pivots.append((col, pivot_row))
+        for r in range(pivot_row + 1, num_rows):
+            while H[r][col]:
+                if abs(H[pivot_row][col]) <= abs(H[r][col]):
+                    # Reduce row via Euclidean division
+                    q = H[r][col] // H[pivot_row][col]
+                    H[r] = [H[r][c] - q * H[pivot_row][c] for c in range(num_cols)]
+                    U[r] = [U[r][c] - q * U[pivot_row][c] for c in range(num_rows)]
+                else:
+                    # Swap rows
+                    H[pivot_row], H[r] = H[r], H[pivot_row]
+                    U[pivot_row], U[r] = U[r], U[pivot_row]
+
+        # Ensure positive pivot
+        if H[pivot_row][col] < 0:
+            H[pivot_row] = [-value for value in H[pivot_row]]
+            U[pivot_row] = [-value for value in U[pivot_row]]
+
+        # Reduce entries above pivot
+        pivot = H[pivot_row][col]
+        for r in range(pivot_row):
+            if H[r][col] and (q := H[r][col] // pivot):
+                H[r] = [H[r][c] - q * H[pivot_row][c] for c in range(num_cols)]
+                U[r] = [U[r][c] - q * U[pivot_row][c] for c in range(num_rows)]
+
+    return (H, U)
+
+def _poly_num_variables(f: Polynomial) -> int:
+    """
+    Return the number of variables in multivariate polynomial f.
+    """
+    return len(next(iter(f))) if f else 0
+
+def _poly_degree(f: Polynomial, weights: tuple[int, ...] | None = None) -> int:
+    """
+    Return the degree of multivariate polynomial f.
+    """
+    if weights is None:
+        return max((sum(m) for m in f), default=-1)
+    return max((sum(w * e for w, e in zip(weights, m)) for m in f), default=-1)
+
+def _poly_eval(f: Polynomial, x: tuple[int, ...], mod: int = None) -> int:
+    """
+    Evaluate multivariate polynomial f at point x, optionally reducing modulo mod.
+    """
+    total = sum(c * prod(pow(x_i, e) for x_i, e in zip(x, m)) for m, c in f.items())
+    return total if mod is None else total % mod
+
+def _poly_make_canonical(f: Polynomial[int]) -> Polynomial[int]:
+    """
+    Get canonical polynomial with integer coefficients and positive leading coefficient.
+    """
+    if not (f := {m: c for m, c in f.items() if c}): return {}
+    if (g := gcd(*f.values())) > 1: f = {m: c // g for m, c in f.items()}
+    if f[max(f)] < 0: f = {m: -c for m, c in f.items()}
+    return f
+
+def _poly_sub(f: Polynomial, g: Polynomial) -> Polynomial:
+    """
+    Subtract two multivariate polynomials. Returns f - g.
+    """
+    out = {**f, **{m: f.get(m, 0) - c for m, c in g.items()}}
+    return {m: c for m, c in out.items() if c}
+
+def _poly_mul(f: Polynomial, g: Polynomial) -> Polynomial:
+    """
+    Multiply two multivariate polynomials. Returns f * g.
+    """
+    out = defaultdict(int)
+    for m_f, c_f in f.items():
+        for m_g, c_g in g.items():
+            out[tuple(ea + eb for ea, eb in zip(m_f, m_g))] += c_f * c_g
+
+    return {m: c for m, c in out.items() if c}
+
+def _poly_make_monic(f: Polynomial) -> Polynomial[Fraction]:
+    """
+    Divide polynomial f by its leading coefficient to make it monic.
+    """
+    if not (f := {m: Fraction(c) for m, c in f.items() if c}): return {}
+    return f if (lead_c := f[max(f)]) == 1 else {m: c / lead_c for m, c in f.items()}
+
+def _poly_univariate_coeffs(
+    f: Polynomial[int],
+    variable_index: int,
+) -> list[int] | None:
+    """
+    Extract univariate coefficients for variable at index, or None if not univariate.
+    """
+    if not f or not (0 <= variable_index < _poly_num_variables(f)): return None
+    coeffs = [0] * (max(monomial[variable_index] for monomial in f) + 1)
+    for monomial, c in f.items():
+        if any(e and i != variable_index for i, e in enumerate(monomial)):
+            return None
+        coeffs[monomial[variable_index]] += c
+
+    while len(coeffs) > 1 and coeffs[-1] == 0:
+        coeffs.pop()
+
+    return coeffs
+
+def _poly_substitute(f: Polynomial, variable_index: int, value: int) -> Polynomial:
+    """
+    Substitute a value for one variable, reducing the polynomial dimension by one.
+    """
+    out = defaultdict(int)
+    for monomial, c in f.items():
+        c *= pow(value, monomial[variable_index])
+        out[monomial[:variable_index] + monomial[variable_index+1:]] += c
+
+    return {m: c for m, c in out.items() if c}
+
+def _poly_apply_value(
+    polynomials: list[Polynomial[int]],
+    variable_index: int,
+    value: int,
+) -> list[Polynomial[int]] | None:
+    """
+    Substitute a value at the given variable into all polynomials.
+    Returns None if any becomes inconsistent.
+    """
+    substituted = [_poly_substitute(f, variable_index, value) for f in polynomials]
+    non_zero = [g for g in substituted if g]
+    return None if any(_poly_num_variables(g) == 0 for g in non_zero) else non_zero
+
+def _poly_reduce(
+    f: Polynomial[Fraction],
+    polynomials: list[Polynomial[Fraction]],
+) -> Polynomial[Fraction]:
+    """
+    Reduce polynomial f modulo a collection of polynomials via multivariate division.
+    """
+    f, reduced = dict(f), {}
+    while f:
+        c_f = f[m_f := max(f)]
+        for g in polynomials:
+            if not g: continue
+            m_g = max(g)
+            if all(ea <= eb for ea, eb in zip(m_g, m_f)):
+                shift = tuple(eb - ea for ea, eb in zip(m_g, m_f))
+                f = _poly_sub(f, _poly_mul(g, {shift: c_f / g[m_g]}))
+                break
+        else:
+            reduced[m_f] = reduced.get(m_f, Fraction(0)) + c_f
+            del f[m_f]
+
+    return {m: c for m, c in reduced.items() if c}
+
+def _grobner_basis(
+    polynomials: list[Polynomial[int]],
+    groebner_max_basis: int = 200,
+) -> list[Polynomial[int]] | None:
+    """
+    Use Buchberger's algorithm to transform a set of polynomials into a Gröbner basis.
+    """
+    # Find Gröbner basis G
+    G = [_poly_make_monic(f) for f in polynomials if f]
+    pairs = list(itertools.combinations(range(len(G)), 2))
+    while pairs and len(G) < groebner_max_basis:
+        # Cancel leading terms of f and g to compute the S-polynomial
+        f, g = (G[i] for i in pairs.pop())
+        f_monomial, g_monomial = max(f), max(g)
+        lcm_monomial = tuple(map(max, f_monomial, g_monomial))
+        shift_f = tuple(eb - ea for ea, eb in zip(f_monomial, lcm_monomial))
+        shift_g = tuple(eb - ea for ea, eb in zip(g_monomial, lcm_monomial))
+        term_f = _poly_mul(f, {shift_f: 1 / f[f_monomial]})
+        term_g = _poly_mul(g, {shift_g: 1 / g[g_monomial]})
+        S = _poly_sub(term_f, term_g)  # leading terms cancel
+
+        # Reduce S against current basis (multivariate polynomial division)
+        h = _poly_make_monic(_poly_reduce(S, G))
+        if len(h) == 1 and not any(next(iter(h))):
+            return None  # contradiction: 1 = 0
+        if h:
+            # Add new polynomial to basis and queue pairs with it
+            G.append(h)
+            pairs.extend((k, len(G) - 1) for k in range(len(G) - 1))
+
+    # Interreduction to simplify the basis
+    for i in range(len(G)):
+        G[i] = _poly_reduce(G[i], G[:i] + G[i + 1:])
+
+    # Convert back to integer coefficients
+    return [
+        _poly_make_canonical({m: int(c * denominator) for m, c in g.items()})
+        for g in (_poly_make_monic(f) for f in G if f)
+        for denominator in [lcm(*(c.denominator for c in g.values()))]
+    ]
+
+def _find_integer_roots_bounded_univariate(
+    coefficients: list[int],
+    bound: int,
+) -> set[int]:
+    """
+    Find all integer roots r with |r| < bound for a univariate polynomial.
+    """
+    # Handle special cases
+    f = polynomial(coefficients)
+    if len(coefficients) <= 1:
+        return set()  # constant polynomial
+    if bound <= 35000:
+        return {x for x in range(-bound + 1, bound) if f(x) == 0}  # brute force
+
+    # Find roots modulo primes
+    p, gcd_coefficients = 65521, gcd(*coefficients)
+    for _ in range(32):
+        p = next_prime(p)
+        if gcd_coefficients % p == 0:
+            continue
+
+        # Find roots mod p^k for some k such that p^k > 2B covers interval (-B, B)
+        mod = p**(k := ilog(2*bound, p) + 1)
+        mod_roots = (r if r < mod // 2 else r - mod for r in hensel(coefficients, p, k))
+        if (roots := set(r for r in mod_roots if abs(r) < bound and f(r) == 0)):
+            return roots
+
+    return set()
+
+def _brute_force_polynomial_system(
+    polynomials: list[Polynomial[int]],
+    bounds: tuple[int, ...],
+    mod: int = None,
+    brute_force_limit: int = 1000000,
+) -> list[tuple[int, ...]] | None:
+    """
+    Use exhaustive search to find all small roots
+    to a system of multivariate polynomials fₖ(x) = 0 where x = (x₁, x₂, ...).
+    """
+    ranges = [range(-b + 1, b) for b in bounds]
+    if prod(2*b - 1 for b in bounds) > brute_force_limit:
+        return None
+    elif not polynomials:
+        return list(itertools.product(*ranges))
+    else:
+        is_root = lambda f, x: (_poly_eval(f, x, mod) == 0)
+        points = itertools.product(*ranges)
+        return sorted(x for x in points if all(is_root(f, x) for f in polynomials))
+
+def _solve_polynomial_system(
+    polynomials: list[Polynomial[int]],
+    bounds: tuple[int, ...],
+    max_backtrack_values: int = 200000,
+) -> list[tuple[int, ...]]:
+    """
+    Find integer solutions to a system of multivariate polynomials
+    fₖ(x) = 0 where x = (x₁, x₂, ...) and |xᵢ| < bounds[i] for each variable xᵢ.
+
+    Solves by eliminating one variable at a time and backtracking.
+    """
+    polynomials = [f for f in polynomials if f]
+    if len(bounds) == 0:
+        return [()]
+
+    # Try brute force if bounds are small enough
+    solutions = _brute_force_polynomial_system(polynomials, bounds)
+    if solutions is not None:
+        return solutions
+
+    # Identify the best univariate polynomial within a group of candidates
+    def best_univariate(polynomials: list[dict]) -> tuple[int, list[int]] | None:
+        candidates = [
+            ((i, coefficients), (len(coefficients), bound, len(f)))
+            for f in polynomials
+            for i, bound in enumerate(bounds)
+            if (coefficients := _poly_univariate_coeffs(f, i))
+        ]
+        return min(candidates, key=lambda x: x[1])[0] if candidates else None
+
+    # Search for a univariate polynomial among the input polynomials
+    # or derive one via Gröbner basis computation
+    if (best := best_univariate(polynomials)) is None:
+        if (G := _grobner_basis(polynomials)) is None:
+            return []  # inconsistent system, no solutions
+        else:
+            best = best_univariate(G)
+
+    # Determine values to try
+    if best is not None:
+        i, coefficients = best
+        values = _find_integer_roots_bounded_univariate(coefficients, bounds[i])
+    else:
+        b = min(bounds[0], (max_backtrack_values + 1) // 2)
+        i, values = 0, range(-b + 1, b)
+
+    # Substitute x_i = v for our chosen variable over each of the potential values
+    solutions = set()
+    for value in values:
+        if (next_polynomials := _poly_apply_value(polynomials, i, value)) is not None:
+            for sol in _solve_polynomial_system(
+                next_polynomials,
+                bounds[:i] + bounds[i + 1:],  # remove i-th bound
+                max_backtrack_values,
+            ):
+                solutions.add(sol[:i] + (value,) + sol[i:])  # reinsert for x_i
+
+    return sorted(solutions)
+
+def _permute_variables(
+    polynomials: list[Polynomial],
+    bounds: tuple[int, ...],
+) -> tuple[list[Polynomial], tuple[int, ...], dict[int, int]]:
+    """
+    Permute variables so smallest bounds come first.
+    Returns (polynomials, bounds, index_dict).
+    """
+    permutation = sorted(range(len(bounds)), key=lambda i: (bounds[i], i))
+    polynomials = [
+        {tuple(monomial[i] for i in permutation): c for monomial, c in f.items() if c}
+        for f in polynomials
+    ]
+    bounds = tuple(bounds[i] for i in permutation)
+    return polynomials, bounds, {j: i for i, j in enumerate(permutation)}
+
+
+
+########################################################################
 ############################### Lattices ###############################
 ########################################################################
 
@@ -4189,23 +4807,19 @@ def small_roots(
     relations = _extract_coppersmith_relations(lll_reduce(lattice), basis, scales, M**m)
     hg_relations, other_relations = relations
 
-    # Permute variables so smallest bounds come first (better for backtracking)
-    selected = _select_coppersmith_polynomials(hg_relations, weights, basis_index)
-    selected, bounds, index = _permute_variables(selected, bounds)
-    unpermute = lambda x: tuple(x[index[i]] for i in range(num_variables))
-
     # Try solving with increasing numbers of Howgrave-Graham polynomials
+    selected = _select_coppersmith_polynomials(hg_relations, weights, basis_index)
     for k in range(min(2, num_variables), len(selected) + 1):
-        solutions = _solve_polynomial_system(selected[:k], bounds)
-        solutions = {x for x in map(unpermute, solutions) if _poly_eval(f, x) % M == 0}
+        solutions = polynomial_solve(selected[:k], bounds)
+        solutions = {x for x in solutions if _poly_eval(f, x) % M == 0}
         if solutions:
             return sorted(solutions)
 
     # Fallback to check roots of individual non-Howgrave-Graham polynomials
     roots = set()
     for g in other_relations:
-        solutions = _solve_polynomial_system([g], bounds)
-        roots.update(x for x in map(unpermute, solutions) if _poly_eval(f, x) % M == 0)
+        solutions = polynomial_solve([g], bounds)
+        roots.update(x for x in solutions if _poly_eval(f, x) % M == 0)
 
     return sorted(roots)
 
@@ -4518,91 +5132,6 @@ def _enumerate_svp_block(
 
     return best_coefficients, best_squared_norm
 
-def _poly_num_variables(f: Polynomial) -> int:
-    """
-    Return the number of variables in multivariate polynomial f.
-    """
-    return len(next(iter(f))) if f else 0
-
-def _poly_degree(f: Polynomial, weights: tuple[int, ...] | None = None) -> int:
-    """
-    Return the degree of multivariate polynomial f.
-    """
-    if weights is None:
-        return max((sum(m) for m in f), default=-1)
-    return max((sum(w * e for w, e in zip(weights, m)) for m in f), default=-1)
-
-def _poly_eval(f: Polynomial, x: tuple[int, ...], mod: int = None) -> int:
-    """
-    Evaluate multivariate polynomial f at point x, optionally reducing modulo mod.
-    """
-    total = sum(c * prod(pow(x_i, e) for x_i, e in zip(x, m)) for m, c in f.items())
-    return total if mod is None else total % mod
-
-def _poly_make_canonical(f: Polynomial[int]) -> Polynomial[int]:
-    """
-    Get canonical polynomial with integer coefficients and positive leading coefficient.
-    """
-    if not (f := {m: c for m, c in f.items() if c}): return {}
-    if (g := gcd(*f.values())) > 1: f = {m: c // g for m, c in f.items()}
-    if f[max(f)] < 0: f = {m: -c for m, c in f.items()}
-    return f
-
-def _poly_sub(f: Polynomial, g: Polynomial) -> Polynomial:
-    """
-    Subtract two multivariate polynomials. Returns f - g.
-    """
-    out = {**f, **{m: f.get(m, 0) - c for m, c in g.items()}}
-    return {m: c for m, c in out.items() if c}
-
-def _poly_mul(f: Polynomial, g: Polynomial) -> Polynomial:
-    """
-    Multiply two multivariate polynomials. Returns f * g.
-    """
-    out = defaultdict(int)
-    for m_f, c_f in f.items():
-        for m_g, c_g in g.items():
-            out[tuple(ea + eb for ea, eb in zip(m_f, m_g))] += c_f * c_g
-
-    return {m: c for m, c in out.items() if c}
-
-def _poly_make_monic(f: Polynomial) -> Polynomial[Fraction]:
-    """
-    Divide polynomial f by its leading coefficient to make it monic.
-    """
-    if not (f := {m: Fraction(c) for m, c in f.items() if c}): return {}
-    return f if (lead_c := f[max(f)]) == 1 else {m: c / lead_c for m, c in f.items()}
-
-def _poly_univariate_coeffs(
-    f: Polynomial[int],
-    variable_index: int,
-) -> list[int] | None:
-    """
-    Extract univariate coefficients for variable at index, or None if not univariate.
-    """
-    if not f or not (0 <= variable_index < _poly_num_variables(f)): return None
-    coeffs = [0] * (max(monomial[variable_index] for monomial in f) + 1)
-    for monomial, c in f.items():
-        if any(e and i != variable_index for i, e in enumerate(monomial)):
-            return None
-        coeffs[monomial[variable_index]] += c
-
-    while len(coeffs) > 1 and coeffs[-1] == 0:
-        coeffs.pop()
-
-    return coeffs
-
-def _poly_substitute(f: Polynomial, variable_index: int, value: int) -> Polynomial:
-    """
-    Substitute a value for one variable, reducing the polynomial dimension by one.
-    """
-    out = defaultdict(int)
-    for monomial, c in f.items():
-        c *= pow(value, monomial[variable_index])
-        out[monomial[:variable_index] + monomial[variable_index+1:]] += c
-
-    return {m: c for m, c in out.items() if c}
-
 def _monomial_weights_from_bounds(bounds: tuple[int, ...]) -> tuple[int, ...]:
     """
     Compute monomial weights from bounds based on bit lengths.
@@ -4626,209 +5155,6 @@ def _enumerate_monomials_weighted(
     monomials = [m for m in ranges if wdeg(m) <= max_weighted_degree]
     monomials.sort(key=lambda m: (wdeg(m), sum(m), m))
     return monomials
-
-def _poly_reduce(
-    f: Polynomial[Fraction],
-    polynomials: list[Polynomial[Fraction]],
-) -> Polynomial[Fraction]:
-    """
-    Reduce polynomial f modulo a collection of polynomials via multivariate division.
-    """
-    f, reduced = dict(f), {}
-    while f:
-        c_f = f[m_f := max(f)]
-        for g in polynomials:
-            if not g: continue
-            m_g = max(g)
-            if all(ea <= eb for ea, eb in zip(m_g, m_f)):
-                shift = tuple(eb - ea for ea, eb in zip(m_g, m_f))
-                f = _poly_sub(f, _poly_mul(g, {shift: c_f / g[m_g]}))
-                break
-        else:
-            reduced[m_f] = reduced.get(m_f, Fraction(0)) + c_f
-            del f[m_f]
-
-    return {m: c for m, c in reduced.items() if c}
-
-def _permute_variables(
-    polynomials: list[Polynomial],
-    bounds: tuple[int, ...],
-) -> tuple[list[Polynomial], tuple[int, ...], dict[int, int]]:
-    """
-    Permute variables so smallest bounds come first.
-    Returns (polynomials, bounds, index_dict).
-    """
-    permutation = sorted(range(len(bounds)), key=lambda i: (bounds[i], i))
-    polynomials = [
-        {tuple(monomial[i] for i in permutation): c for monomial, c in f.items() if c}
-        for f in polynomials
-    ]
-    bounds = tuple(bounds[i] for i in permutation)
-    return polynomials, bounds, {j: i for i, j in enumerate(permutation)}
-
-def _poly_apply_value(
-    polynomials: list[Polynomial[int]],
-    variable_index: int,
-    value: int,
-) -> list[Polynomial[int]] | None:
-    """
-    Substitute a value at the given variable into all polynomials.
-    Returns None if any becomes inconsistent.
-    """
-    substituted = [_poly_substitute(f, variable_index, value) for f in polynomials]
-    non_zero = [g for g in substituted if g]
-    return None if any(_poly_num_variables(g) == 0 for g in non_zero) else non_zero
-
-def _grobner_basis(
-    polynomials: list[Polynomial[int]],
-    groebner_max_basis: int = 200,
-) -> list[Polynomial[int]] | None:
-    """
-    Use Buchberger's algorithm to transform a set of polynomials into a Gröbner basis.
-    """
-    # Find Gröbner basis G
-    G = [_poly_make_monic(f) for f in polynomials if f]
-    pairs = list(itertools.combinations(range(len(G)), 2))
-    while pairs and len(G) < groebner_max_basis:
-        # Cancel leading terms of f and g to compute the S-polynomial
-        f, g = (G[i] for i in pairs.pop())
-        f_monomial, g_monomial = max(f), max(g)
-        lcm_monomial = tuple(map(max, f_monomial, g_monomial))
-        shift_f = tuple(eb - ea for ea, eb in zip(f_monomial, lcm_monomial))
-        shift_g = tuple(eb - ea for ea, eb in zip(g_monomial, lcm_monomial))
-        term_f = _poly_mul(f, {shift_f: 1 / f[f_monomial]})
-        term_g = _poly_mul(g, {shift_g: 1 / g[g_monomial]})
-        S = _poly_sub(term_f, term_g)  # leading terms cancel
-
-        # Reduce S against current basis (multivariate polynomial division)
-        h = _poly_make_monic(_poly_reduce(S, G))
-        if len(h) == 1 and not any(next(iter(h))):
-            return None  # contradiction: 1 = 0
-        if h:
-            # Add new polynomial to basis and queue pairs with it
-            G.append(h)
-            pairs.extend((k, len(G) - 1) for k in range(len(G) - 1))
-
-    # Interreduction to simplify the basis
-    for i in range(len(G)):
-        G[i] = _poly_reduce(G[i], G[:i] + G[i + 1:])
-
-    # Convert back to integer coefficients
-    return [
-        _poly_make_canonical({m: int(c * denominator) for m, c in g.items()})
-        for g in (_poly_make_monic(f) for f in G if f)
-        for denominator in [lcm(*(c.denominator for c in g.values()))]
-    ]
-
-def _find_integer_roots_bounded_univariate(
-    coefficients: list[int],
-    bound: int,
-) -> set[int]:
-    """
-    Find all integer roots r with |r| < bound for a univariate polynomial.
-    """
-    # Handle special cases
-    f = polynomial(coefficients)
-    if len(coefficients) <= 1:
-        return set()  # constant polynomial
-    if bound <= 35000:
-        return {x for x in range(-bound + 1, bound) if f(x) == 0}  # brute force
-
-    # Find roots modulo primes
-    p, gcd_coefficients = 65521, gcd(*coefficients)
-    for _ in range(32):
-        p = next_prime(p)
-        if gcd_coefficients % p == 0:
-            continue
-
-        # Find roots mod p^k for some k such that p^k > 2B covers interval (-B, B)
-        mod = p**(k := ilog(2*bound, p) + 1)
-        mod_roots = (r if r < mod // 2 else r - mod for r in hensel(coefficients, p, k))
-        if (roots := set(r for r in mod_roots if abs(r) < bound and f(r) == 0)):
-            return roots
-
-    return set()
-
-def _brute_force_polynomial_system(
-    polynomials: list[Polynomial[int]],
-    bounds: tuple[int, ...],
-    mod: int = None,
-    brute_force_limit: int = 1000000,
-) -> list[tuple[int, ...]] | None:
-    """
-    Use exhaustive search to find all small roots
-    to a system of multivariate polynomials fₖ(x) = 0 where x = (x₁, x₂, ...).
-    """
-    ranges = [range(-b + 1, b) for b in bounds]
-    if prod(2*b - 1 for b in bounds) > brute_force_limit:
-        return None
-    elif not polynomials:
-        return list(itertools.product(*ranges))
-    else:
-        is_root = lambda f, x: (_poly_eval(f, x, mod) == 0)
-        points = itertools.product(*ranges)
-        return sorted(x for x in points if all(is_root(f, x) for f in polynomials))
-
-def _solve_polynomial_system(
-    polynomials: list[Polynomial[int]],
-    bounds: tuple[int, ...],
-    max_backtrack_values: int = 200000,
-) -> list[tuple[int, ...]]:
-    """
-    Find integer solutions to a system of multivariate polynomials
-    fₖ(x) = 0 where x = (x₁, x₂, ...) and |xᵢ| < bounds[i] for each variable xᵢ.
-
-    Solves by eliminating one variable at a time and backtracking.
-    """
-    polynomials = [f for f in polynomials if f]
-    if len(bounds) == 0:
-        return [()]
-
-    # Try brute force if bounds are small enough
-    solutions = _brute_force_polynomial_system(polynomials, bounds)
-    if solutions is not None:
-        return solutions
-
-    # Identify the best univariate polynomial within a group of candidates
-    def best_univariate(polynomials: list[dict]) -> tuple[int, list[int]] | None:
-        candidates = [
-            ((i, coefficients), (len(coefficients), bound, len(f)))
-            for f in polynomials
-            for i, bound in enumerate(bounds)
-            if (coefficients := _poly_univariate_coeffs(f, i))
-        ]
-        return min(candidates, key=lambda x: x[1])[0] if candidates else None
-
-    # Search for a univariate polynomial among the input polynomials
-    # or derive one via Gröbner basis computation (only if we only have <= 6 variables)
-    best = best_univariate(polynomials)
-    if best is None and len(bounds) <= 6:
-        if (G := _grobner_basis(polynomials)) is None:
-            return []  # inconsistent system, no solutions
-        else:
-            best = best_univariate(G)
-
-    # Determine values to try
-    if best is not None:
-        i, coefficients = best
-        values = _find_integer_roots_bounded_univariate(coefficients, bounds[i])
-    elif 2 * bounds[0] - 1 <= max_backtrack_values:
-        i, values = 0, range(-bounds[0] + 1, bounds[0])
-    else:
-        return []  # too many values to try
-
-    # Substitute x_i = v for our chosen variable over each of the potential values
-    solutions = set()
-    for value in values:
-        if (next_polynomials := _poly_apply_value(polynomials, i, value)) is not None:
-            for sol in _solve_polynomial_system(
-                next_polynomials,
-                bounds[:i] + bounds[i + 1:],  # remove i-th bound
-                max_backtrack_values,
-            ):
-                solutions.add(sol[:i] + (value,) + sol[i:])  # reinsert for x_i
-
-    return sorted(solutions)
 
 def _build_coppersmith_shifts(
     f: Polynomial[int],
