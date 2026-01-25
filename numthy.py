@@ -52,10 +52,10 @@ __all__ = [
     # Lattices
     'lll_reduce', 'bkz_reduce', 'closest_vector', 'small_roots',
     # Sequences
-    'lucas', 'fibonacci', 'fibonacci_index', 'fibonacci_numbers',
-    'polygonal', 'polygonal_index', 'polygonal_numbers', 'is_polygonal', 'partition',
+    'lucas', 'fibonacci', 'fibonacci_index', 'polygonal', 'polygonal_index',
+    'partition',
     # Appendix
-    'integers', 'integer_pairs', 'alternating',
+    'integers', 'integer_pairs', 'alternating', 'below',
     'periodic_continued_fraction', 'convergents', 'euler_transform', 'permutation',
     'polynomial', 'iroot', 'ilog', 'is_square', 'perfect_power', 'binary_search',
 ]
@@ -112,11 +112,20 @@ def is_prime(n: int) -> bool:
         return n == 2
 
     # Use primorial GCD equivalent to trial division
-    if n <= 59:
-        return n in {3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59}
-    if gcd(n, 961380175077106319535) > 1:  # GCD with 3 * 5 * ... * 59 (odd primes only)
+    prod_odd_primes_below_256 = int(
+        '321331654589543224361653176140533566554400932958046'
+        '04057122379340449075183940351576262600371617210115'
+    )
+    if n <= 256:
+        return n in {
+            3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59,
+            61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127,
+            131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191, 193,
+            197, 199, 211, 223, 227, 229, 233, 239, 241, 251
+        }
+    if gcd(n, prod_odd_primes_below_256) > 1:
         return False
-    if n < 3481:  # n < 59^2, and n coprime to all primes <= 59 => n is prime
+    if n < 65536:  # n < 256^2, and n coprime to all primes <= 256 implies n is prime
         return True
 
     # Check for Mersenne primes
@@ -2177,35 +2186,6 @@ def _prime_factor_range(N: int) -> list[int]:
             prime_divisor[p::p] = [p] * ((N - 1 - p) // p + 1)
 
     return prime_divisor
-
-@small_cache
-def _partition_function(mod: int | None) -> Callable[[int], int]:
-    """
-    Return a callable partition function p(n) for given modulus.
-    """
-    partitions, pentagonals, k = [1], [], 1
-
-    def p(n: int) -> int:
-        nonlocal k
-        while (m := len(partitions)) <= n:
-            # Extend generalized pentagonal numbers k(3k ± 1)/2
-            while not pentagonals or pentagonals[-1][1] <= m:
-                sign = 1 if k % 2 == 1 else -1
-                pentagonals.append((sign, k * (3 * k - 1) // 2))
-                pentagonals.append((sign, k * (3 * k + 1) // 2))
-                k += 1
-
-            # Use Euler's recurrence: p(m) = Σ sign * p(m - offset)
-            total = 0
-            for sign, offset in pentagonals:
-                if offset > m: break
-                total += sign * partitions[m - offset]
-
-            partitions.append(total if mod is None else total % mod)
-
-        return partitions[n]
-
-    return p
 
 
 
@@ -5345,7 +5325,6 @@ def _select_coppersmith_polynomials(
 ############################### Sequences ##############################
 ########################################################################
 
-@small_cache
 def lucas(n: int, P: int = 1, Q: int = -1, mod: int | None = None) -> int:
     """
     Return the n-th Lucas sequence number U_n(P, Q).
@@ -5480,26 +5459,6 @@ def fibonacci_index(n: int) -> int:
 
     return i
 
-def fibonacci_numbers(a: int = 0, b: int = 1, mod: int | None = None) -> Iterator[int]:
-    """
-    Generate Fibonacci numbers.
-
-    Parameters
-    ----------
-    a : int
-        First element of the Fibonacci sequence
-    b : int
-        Second element of the Fibonacci sequence
-    mod : int
-        Optional modulus
-    """
-    a = a if mod is None else a % mod
-    b = b if mod is None else b % mod
-    while True:
-        yield a
-        a, b = b, a + b
-        b = b if mod is None else b % mod
-
 def polygonal(s: int, i: int) -> int:
     """
     Return the i-th s-gonal number.
@@ -5521,32 +5480,6 @@ def polygonal_index(s: int, n: int) -> int:
         return n
 
     return (isqrt(8 * n * (s - 2) + (s - 4) * (s - 4)) + s - 4) // (2 * (s - 2))
-
-def polygonal_numbers(s: int, low: int = 1, high: int | None = None) -> Iterator[int]:
-    """
-    Generate all s-gonal numbers in the range [low, high].
-    """
-    i = polygonal_index(s, low - 1) + 1
-    n = polygonal(s, i)
-    while high is None or n <= high:
-        yield n
-        n += (s - 2) * i + 1
-        i += 1
-
-def is_polygonal(s: int, n: int) -> bool:
-    """
-    Check if n is an s-gonal number.
-    """
-    if n < 0:
-        raise ValueError("n must be a non-negative integer")
-    if s < 2:
-        raise ValueError("Must have s >= 2")
-    if s == 2:
-        return True
-
-    D = 8 * n * (s - 2) + (s - 4) * (s - 4)
-    sqrt_D = isqrt(D)
-    return sqrt_D*sqrt_D == D and (sqrt_D + s - 4) % (2*s - 4) == 0
 
 def partition(
     n: int,
@@ -5571,6 +5504,35 @@ def partition(
 
     p = euler_transform(restrict) if restrict else _partition_function(mod)
     return p(n) if mod is None or restrict is None else p(n) % mod
+
+@small_cache
+def _partition_function(mod: int | None) -> Callable[[int], int]:
+    """
+    Return a callable partition function p(n) for given modulus.
+    """
+    partitions, pentagonals, k = [1], [], 1
+
+    def p(n: int) -> int:
+        nonlocal k
+        while (m := len(partitions)) <= n:
+            # Extend generalized pentagonal numbers k(3k ± 1)/2
+            while not pentagonals or pentagonals[-1][1] <= m:
+                sign = 1 if k % 2 == 1 else -1
+                pentagonals.append((sign, k * (3 * k - 1) // 2))
+                pentagonals.append((sign, k * (3 * k + 1) // 2))
+                k += 1
+
+            # Use Euler's recurrence: p(m) = Σ sign * p(m - offset)
+            total = 0
+            for sign, offset in pentagonals:
+                if offset > m: break
+                total += sign * partitions[m - offset]
+
+            partitions.append(total if mod is None else total % mod)
+
+        return partitions[n]
+
+    return p
 
 
 
@@ -5609,6 +5571,12 @@ def alternating(*iterables: Iterable) -> Iterator:
         try: yield next(iterable)
         except StopIteration: continue
         queue.append(iterable)
+
+def below(f: Callable[[int], int], upper_bound: int, start: int = 0) -> Iterable[int]:
+    """
+    Yield values of f(n) with n counting up from start as long f(n) < upper_bound.
+    """
+    return itertools.takewhile(lambda n: f(n) < upper_bound, itertools.count(start))
 
 def periodic_continued_fraction(
     D: int,
