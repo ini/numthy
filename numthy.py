@@ -53,12 +53,11 @@ __all__ = [
     'lll_reduce', 'bkz_reduce', 'closest_vector', 'small_roots',
     # Sequences
     'lucas', 'fibonacci', 'fibonacci_index', 'fibonacci_numbers',
-    'polygonal', 'polygonal_index', 'polygonal_numbers', 'is_polygonal',
-    'partition', 'partition_numbers', 'euler_transform',
+    'polygonal', 'polygonal_index', 'polygonal_numbers', 'is_polygonal', 'partition',
     # Appendix
     'integers', 'integer_pairs', 'alternating',
-    'periodic_continued_fraction', 'convergents', 'permutation', 'polynomial',
-    'iroot', 'ilog', 'is_square', 'perfect_power', 'binary_search',
+    'periodic_continued_fraction', 'convergents', 'euler_transform', 'permutation',
+    'polynomial', 'iroot', 'ilog', 'is_square', 'perfect_power', 'binary_search',
 ]
 
 _NoSolutionError = type('_NoSolutionError', (Exception,), {})
@@ -2093,7 +2092,7 @@ def valuation(n: int, p: int) -> int:
     # For general p, use doubling to achieve O(log v) divisions
     # Build powers p, p^2, p^4, p^8, ... while p^(2^k) <= n
     powers = [(p, 1)]
-    power, exponent = 1, 1
+    power, exponent = p, 1
     while (power := power * power) <= n:
         powers.append((power, exponent := 2*exponent))
 
@@ -2178,6 +2177,35 @@ def _prime_factor_range(N: int) -> list[int]:
             prime_divisor[p::p] = [p] * ((N - 1 - p) // p + 1)
 
     return prime_divisor
+
+@small_cache
+def _partition_function(mod: int | None) -> Callable[[int], int]:
+    """
+    Return a callable partition function p(n) for given modulus.
+    """
+    partitions, pentagonals, k = [1], [], 1
+
+    def p(n: int) -> int:
+        nonlocal k
+        while (m := len(partitions)) <= n:
+            # Extend generalized pentagonal numbers k(3k ± 1)/2
+            while not pentagonals or pentagonals[-1][1] <= m:
+                sign = 1 if k % 2 == 1 else -1
+                pentagonals.append((sign, k * (3 * k - 1) // 2))
+                pentagonals.append((sign, k * (3 * k + 1) // 2))
+                k += 1
+
+            # Use Euler's recurrence: p(m) = Σ sign * p(m - offset)
+            total = 0
+            for sign, offset in pentagonals:
+                if offset > m: break
+                total += sign * partitions[m - offset]
+
+            partitions.append(total if mod is None else total % mod)
+
+        return partitions[n]
+
+    return p
 
 
 
@@ -5390,7 +5418,6 @@ def lucas(n: int, P: int = 1, Q: int = -1, mod: int | None = None) -> int:
 
     return U_k if mod is None else U_k % mod
 
-@small_cache
 def fibonacci(i: int, mod: int | None = None) -> int:
     """
     Return the i-th Fibonacci number.
@@ -5521,7 +5548,11 @@ def is_polygonal(s: int, n: int) -> bool:
     sqrt_D = isqrt(D)
     return sqrt_D*sqrt_D == D and (sqrt_D + s - 4) % (2*s - 4) == 0
 
-def partition(n: int, restrict: Callable[[int], bool] | None = None) -> int:
+def partition(
+    n: int,
+    mod: int | None = None,
+    restrict: Callable[[int], bool] | None = None,
+) -> int:
     """
     Return the n-th partition number p(n).
 
@@ -5529,78 +5560,17 @@ def partition(n: int, restrict: Callable[[int], bool] | None = None) -> int:
     ----------
     n : int
         Integer to partition
+    mod : int | None
+        If provided, return p(n) mod m
     restrict : Callable(int) -> bool
         Function indicating integers that can be used in the partition,
         where restrict(k) = True means integer k can be used
     """
     if n < 0:
         raise ValueError("n must be a non-negative integer")
-    if restrict:
-        return euler_transform(restrict)(n)
-    else:
-        return next(itertools.islice(partition_numbers(), n, None))
 
-def partition_numbers(mod: int | None = None) -> Iterator[int]:
-    """
-    Generate values of the partition function p(n) via Euler's pentagonal recurrence.
-
-    Complexity
-    ----------
-    O(n³ᐟ²) amortized time per term (n-th partition uses O(√n) pentagonal offsets).
-    O(n) space to store previous partition values.
-    """
-    yield 1
-    n, k = 0, 1
-    partitions, euler_pentagonal = [1], deque()
-
-    while True:
-        n += 1
-
-        # Extend generalized pentagonal numbers to cover offsets up to n
-        while not euler_pentagonal or euler_pentagonal[-1][1] <= n:
-            sign = 1 if k % 2 == 1 else -1
-            euler_pentagonal.append((sign, k * (3 * k - 1) // 2))
-            euler_pentagonal.append((sign, k * (3 * k + 1) // 2))
-            k += 1
-
-        # Euler's recurrence: p(n) = Σ sign * p(n - offset)
-        p = 0
-        for sign, off in euler_pentagonal:
-            if off > n: break
-            p += sign * partitions[n - off]
-
-        p = p if mod is None else p % mod
-        yield p
-        partitions.append(p)
-
-@small_cache
-def euler_transform(a: Callable[[int], int]) -> Callable[[int], int]:
-    """
-    Return the Euler transform of integer sequence a.
-
-    Parameters
-    ----------
-    a : Callable(int) -> int
-        Integer sequence to transform
-    """
-    b_values = [1]
-
-    @lru_cache(maxsize=None)
-    def c(n: int) -> int:
-        return sum(d * a(d) for d in divisors(n))
-
-    def b(n: int) -> int:
-        while len(b_values) <= n:
-            i = len(b_values)
-            total = c(i)
-            for k in range(1, i):
-                total += c(k) * b_values[i - k]
-
-            b_values.append(total // i)
-
-        return b_values[n]
-
-    return b
+    p = euler_transform(restrict) if restrict else _partition_function(mod)
+    return p(n) if mod is None or restrict is None else p(n) % mod
 
 
 
@@ -5713,6 +5683,35 @@ def convergents(
         A, A_prev = a * A + A_prev, A
         B, B_prev = a * B + B_prev, B
         yield A, B
+
+@small_cache
+def euler_transform(a: Callable[[int], int]) -> Callable[[int], int]:
+    """
+    Return the Euler transform of integer sequence a.
+
+    Parameters
+    ----------
+    a : Callable(int) -> int
+        Integer sequence to transform
+    """
+    b_values = [1]
+
+    @lru_cache(maxsize=None)
+    def c(n: int) -> int:
+        return sum(d * a(d) for d in divisors(n))
+
+    def b(n: int) -> int:
+        while len(b_values) <= n:
+            i = len(b_values)
+            total = c(i)
+            for k in range(1, i):
+                total += c(k) * b_values[i - k]
+
+            b_values.append(total // i)
+
+        return b_values[n]
+
+    return b
 
 def permutation(n: int, master_key: bytes | None = None) -> Iterator[int]:
     """
