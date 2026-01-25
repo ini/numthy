@@ -53,7 +53,7 @@ __all__ = [
     # Lattices
     'lll_reduce', 'bkz_reduce', 'closest_vector', 'small_roots',
     # Sequences
-    'lucas', 'fibonacci', 'fibonacci_index', 'polygonal', 'polygonal_index',
+    'fibonacci', 'fibonacci_index', 'polygonal', 'polygonal_index',
     # Appendix
     'integers', 'integer_pairs', 'alternating', 'below', 'lower_bound', 'permutation',
     'is_square', 'iroot', 'ilog', 'periodic_continued_fraction', 'convergents', 
@@ -5676,97 +5676,36 @@ def _select_coppersmith_polynomials(
 ############################### Sequences ##############################
 ########################################################################
 
-def lucas(n: int, P: int = 1, Q: int = -1, mod: int | None = None) -> int:
+def fibonacci(n: int, mod: int | None = None) -> int:
     """
-    Return the n-th Lucas sequence number U_n(P, Q).
-
-    The Lucas sequence is defined by the recurrence
-        U_0 = 0
-        U_1 = 1
-        U_n = P * U_{n-1} - Q * U_{n-2}
-
-    The Fibonacci sequence is the special case where P=1 and Q=-1.
-
-    Uses fast doubling with formulas
-        U_{2k} = U_k * (2*U_{k+1} - P*U_k)
-        U_{2k-1} = U_k^2 - Q*U_{k-1}^2
-        U_{2k+1} = P*U_{2k} - Q*U_{2k-1}
+    Return the n-th Fibonacci number.
 
     Parameters
     ----------
     n : int
-        Index of the Lucas sequence number
-    P : int
-        First parameter of the Lucas sequence (default 1)
-    Q : int
-        Second parameter of the Lucas sequence (default -1)
-    mod : int
-        Optional modulus
-
-    Complexity
-    ----------
-    O(log n) time using binary fast doubling
-    """
-    if n < 0 and Q == 0:
-        raise ValueError("Lucas sequence with Q = 0 undefined for n < 0")
-    elif n < 0 and mod is not None and gcd(Q, mod) != 1:
-        raise ValueError(f"Must have gcd(Q, mod) = 1 for n < 0")
-    elif n < 0:
-        U = lucas(-n, P, Q, mod)
-        if mod is not None:
-            return (-U * pow(Q, n, mod)) % mod
-        else:
-            divisor = Q**(-n)
-            if U % divisor != 0:
-                raise ValueError(f"U_{n}(P={P}, Q={Q}) is not an integer")
-            return -U // divisor
-    elif n == 0:
-        return 0
-    elif n == 1:
-        return 1 if mod is None else 1 % mod
-
-    # Fast doubling via binary representation
-    U_k, U_k_minus_1 = 1, 0
-
-    for i in range(n.bit_length() - 2, -1, -1):
-        # Doubling step: U_k -> U_{2k}
-        U_k_plus_1 = P*U_k - Q*U_k_minus_1
-        U_2k = U_k * (2*U_k_plus_1 - P*U_k)
-        U_2k_minus_1 = U_k*U_k - Q*U_k_minus_1*U_k_minus_1
-        if mod is not None:
-            U_2k %= mod
-            U_2k_minus_1 %= mod
-
-        if (n >> i) & 1:
-            # Incrementing step: U_{2k} -> U_{2k+1}
-            U_2k_plus_1 = P*U_2k - Q*U_2k_minus_1
-            if mod is not None:
-                U_2k_plus_1 %= mod
-            U_k, U_k_minus_1 = U_2k_plus_1, U_2k
-        else:
-            U_k, U_k_minus_1 = U_2k, U_2k_minus_1
-
-    return U_k if mod is None else U_k % mod
-
-def fibonacci(i: int, mod: int | None = None) -> int:
-    """
-    Return the i-th Fibonacci number.
-
-    The Fibonacci sequence is a special case of the Lucas sequence Uₙ(1, -1).
-
-    Parameters
-    ----------
-    i : int
         Index of the Fibonacci number
     mod : int
         Optional modulus
     """
-    # For small positive i without modulus, use Binet's formula for speed
-    if 0 <= i <= 70 and mod is None:
-        phi = (1 + sqrt(5)) / 2
-        return round(phi**i / sqrt(5))
+    # Handle negative n
+    n, sign = abs(n), (-1 if n < 0 and n % 2 == 0 else 1)
 
-    return lucas(i, P=1, Q=-1, mod=mod)
+    # Compute Fibonacci number
+    if n <= 70:
+        # For small positive n, use Binet's formula for speed
+        phi = (1 + sqrt(5)) / 2
+        F = round(phi**n / sqrt(5))
+    else:
+        # Fast doubling for larger Fibonacci numbers
+        F, F_next = 1, 1
+        for bit in format(n, 'b')[1:]:
+            F, F_next = F * (2*F_next - F), F*F + F_next*F_next
+            if bit != '0':
+                F, F_next = F_next, F + F_next
+            if mod is not None:
+                F, F_next = F % mod, F_next % mod
+
+    return sign * (F if mod is None else F % mod)
 
 def fibonacci_index(n: int) -> int:
     """

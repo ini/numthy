@@ -1012,52 +1012,18 @@ about O(H⁵W log³A) time and O(H² + HW) space, where A is the max lattice`
 
 # Sequences
 
-### lucas
-
-```python
-lucas(n: int, P: int=1, Q: int=-1, mod: int | None=None) -> int
-```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5679)
-
-> Return the n-th Lucas sequence number U_n(P, Q).
-
-The Lucas sequence is defined by the recurrence
-    U_0 = 0
-    U_1 = 1
-    U_n = P * U_{n-1} - Q * U_{n-2}
-
-The Fibonacci sequence is the special case where P=1 and Q=-1.
-
-Uses fast doubling with formulas
-    U_{2k} = U_k * (2*U_{k+1} - P*U_k)
-    U_{2k-1} = U_k^2 - Q*U_{k-1}^2
-    U_{2k+1} = P*U_{2k} - Q*U_{2k-1}
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `n` | `int` | Index of the Lucas sequence number |
-| `P` | `int` | First parameter of the Lucas sequence (default 1) |
-| `Q` | `int` | Second parameter of the Lucas sequence (default -1) |
-| `mod` | `int` | Optional modulus |
-
-**Complexity:** `O(log n) time using binary fast doubling`
-
----
-
 ### fibonacci
 
 ```python
-fibonacci(i: int, mod: int | None=None) -> int
+fibonacci(n: int, mod: int | None=None) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5751)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5679)
 
-> Return the i-th Fibonacci number.
-
-The Fibonacci sequence is a special case of the Lucas sequence Uₙ(1, -1).
+> Return the n-th Fibonacci number.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `i` | `int` | Index of the Fibonacci number |
+| `n` | `int` | Index of the Fibonacci number |
 | `mod` | `int` | Optional modulus |
 
 ---
@@ -1067,7 +1033,7 @@ The Fibonacci sequence is a special case of the Lucas sequence Uₙ(1, -1).
 ```python
 fibonacci_index(n: int) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5771)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5710)
 
 > Find the index of n in the Fibonacci sequence.
 Returns the largest integer i such that F(i) <= n.
@@ -1085,7 +1051,7 @@ Returns the largest integer i such that F(i) <= n.
 ```python
 polygonal(s: int, i: int) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5813)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5752)
 
 > Return the i-th s-gonal number.
 
@@ -1096,7 +1062,7 @@ polygonal(s: int, i: int) -> int
 ```python
 polygonal_index(s: int, n: int) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5819)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5758)
 
 > Find the index of n in the s-gonal numbers.
 Returns the largest integer i such that P(s, i) ≤ n.
@@ -1112,7 +1078,7 @@ Returns the largest integer i such that P(s, i) ≤ n.
 ```python
 integers() -> Iterator[int]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5841)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5780)
 
 > Generate all integers (0, 1, -1, 2, -2, ...) in an infinite generator.
 
@@ -1123,7 +1089,7 @@ integers() -> Iterator[int]
 ```python
 integer_pairs() -> Iterator[tuple[int, int]]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5850)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5789)
 
 > Generate all integer pairs (x, y) via diagonal enumeration.
 
@@ -1134,7 +1100,7 @@ integer_pairs() -> Iterator[tuple[int, int]]
 ```python
 alternating(*iterables: Iterable) -> Iterator
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5862)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5801)
 
 > Visit input iterables in a cycle until each is exhausted.
 
@@ -1145,7 +1111,7 @@ alternating(*iterables: Iterable) -> Iterator
 ```python
 below(f: Callable[[int], int], upper_bound: int, start: int=0) -> Iterable[int]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5873)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5812)
 
 > Yield consecutive values of n >= start as long f(n) < upper_bound.
 
@@ -1156,7 +1122,7 @@ below(f: Callable[[int], int], upper_bound: int, start: int=0) -> Iterable[int]
 ```python
 lower_bound(f: Callable[[int], int], f_min: int, low: int=0, high: int | None=None) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5879)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5818)
 
 > Given a monotonically increasing function f, find where it first reaches f_min.
 Returns the smallest integer n in [low, high] such that f(n) >= f_min.
@@ -1168,7 +1134,7 @@ Returns the smallest integer n in [low, high] such that f(n) >= f_min.
 ```python
 permutation(n: int, master_key: bytes | None=None) -> Iterator[int]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5898)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5837)
 
 > Generate a pseudorandom permutation of the integers 0, 1, ..., n - 1.
 
@@ -1179,7 +1145,7 @@ permutation(n: int, master_key: bytes | None=None) -> Iterator[int]
 ```python
 is_square(n: int) -> bool
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5952)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5891)
 
 > Check if an integer n is a square.
 
@@ -1190,7 +1156,7 @@ is_square(n: int) -> bool
 ```python
 iroot(x: int, n: int) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5958)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5897)
 
 > Find the integer n-th root of x.
 Returns the largest integer a such that a^n ≤ x.
@@ -1203,7 +1169,7 @@ Uses Newton's method.
 ```python
 ilog(a: int, b: int=2) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5989)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5928)
 
 > Find the integer logarithm of a with base b.
 Returns the largest integer n such that b^n ≤ a.
@@ -1216,7 +1182,7 @@ Uses repeated squaring and binary search.
 ```python
 periodic_continued_fraction(D: int, P: int=0, Q: int=1) -> tuple[Iterator[int], int, int]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L6017)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5956)
 
 > Compute coefficients for the periodic continued fraction
 (P + sqrt(D)) / Q = a₀ + 1 / (a₁ + 1 / (a₂ + ...)).
@@ -1236,7 +1202,7 @@ periodic_continued_fraction(D: int, P: int=0, Q: int=1) -> tuple[Iterator[int], 
 ```python
 convergents(coefficients: Iterable[int], num: int | None=None) -> Iterator[tuple[int, int]]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L6063)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L6002)
 
 > Return convergents of the continued fraction with the given coefficients.
 
@@ -1259,7 +1225,7 @@ convergents(coefficients: Iterable[int], num: int | None=None) -> Iterator[tuple
 ```python
 polynomial(coefficients: Sequence[Number], mod: int | None=None) -> Callable[[Number], Number]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L6091)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L6030)
 
 > Create a univariate polynomial function with the given coefficients (a₀, ..., aₙ).
 Uses Horner's method for polynomial evaluation.
