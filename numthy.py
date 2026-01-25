@@ -44,7 +44,7 @@ __all__ = [
     'egcd', 'crt', 'coprimes', 'multiplicative_order', 'primitive_root',
     'legendre', 'jacobi', 'kronecker', 'dirichlet_character',
     # Nonlinear Congruences
-    'hensel', 'nth_roots', 'discrete_log',
+    'hensel', 'polynomial_roots', 'nth_roots', 'discrete_log',
     # Diophantine Equations
     'bezout', 'cornacchia', 'pell', 'conic', 'pythagorean_triples', 'pillai',
     # Algebraic Systems
@@ -2705,7 +2705,7 @@ def hensel(
 
     # Find initial solutions to f(x) = 0 (mod p)
     if initial is None:
-        solutions = {x for x in range(p) if f(x) % p == 0}
+        solutions = _polynomial_roots_mod_prime(coefficients, p)
     else:
         solutions = {x % p for x in initial if f(x) % p == 0}
 
@@ -2718,8 +2718,8 @@ def hensel(
     for _ in range(k - 1):
         new_solutions, new_mod = set(), mod * p
         for root in solutions:
-            f_val = f(root) % new_mod
-            f_coefficient, df_mod = (f_val // mod) % p, df(root) % p
+            f_value = f(root) % new_mod
+            f_coefficient, df_mod = (f_value // mod) % p, df(root) % p
             if df_mod != 0:
                 # Simple root, unique lift
                 t = (-f_coefficient * pow(df_mod, -1, p)) % p
@@ -2733,6 +2733,45 @@ def hensel(
             break
 
     return tuple(root % mod for root in solutions)
+
+def polynomial_roots(coefficients: Sequence[int], mod: int) -> tuple[int, ...]:
+    """
+    Find all roots x of a univariate polynomial f(x) ≡ 0 (mod m).
+
+    Factors m into prime powers, finds roots modulo each p^e via
+    Cantor-Zassenhaus + Hensel lifting, then combines solutions with CRT.
+
+    Parameters
+    ----------
+    coefficients : Sequence[int]
+        Polynomial coefficients, where coefficients[i] is the coefficient for x^i
+    mod : int
+        Modulus
+    """
+    if mod == 0:
+        raise ZeroDivisionError("Modulus must be nonzero")
+
+    m = abs(mod)
+    coefficients = [c % m for c in coefficients]
+    while coefficients and coefficients[-1] == 0:
+        coefficients.pop()
+
+    if not coefficients:
+        return tuple(range(m))  # zero polynomial, all residues are roots
+
+    residue_sets, moduli = [], []
+    for p, e in prime_factorization(m).items():
+        roots = _polynomial_roots_mod_prime(coefficients, p)
+        roots = roots if e == 1 else hensel(coefficients, p, e, initial=roots)
+        if not roots:
+            return ()
+        residue_sets.append(tuple(roots))
+        moduli.append(p**e)
+
+    return tuple(
+        crt(zip(residues, moduli))
+        for residues in itertools.product(*residue_sets)
+    )
 
 def nth_roots(a: int, n: int, mod: int) -> tuple[int, ...]:
     """
@@ -2830,6 +2869,222 @@ def discrete_log(a: int, b: int, mod: int) -> int | None:
     # Combine solutions via Chinese Remainder Theorem
     x = crt(congruences)
     return None if x is None else x + offset
+
+def _polynomial_roots_mod_prime(coefficients: Sequence[int], p: int) -> tuple[int, ...]:
+    """
+    Find all roots of a univariate polynomial f(x) over F_p.
+
+    Uses the Cantor-Zassenhaus algorithm to factor the polynomial, extracting
+    roots from linear factors. Computes gcd(f, x^p - x) first to isolate the
+    product of linear factors.
+
+    Complexity
+    ----------
+    O(d² log d log p) expected time for degree-d polynomial
+    """
+    if not is_prime(p):
+        raise ValueError("p must be prime")
+
+    # Handle special cases
+    coefficients = [c % p for c in coefficients]
+    while coefficients and coefficients[-1] == 0: coefficients.pop()
+    if not coefficients: return tuple(range(p))  # zero polynomial
+    if len(coefficients) == 1: return ()  # non-zero constant, no roots
+
+    # Brute force for small p where Cantor-Zassenhaus overhead exceeds O(p) iteration
+    if p <= 50 + 5 * (len(coefficients) - 1):
+        f = polynomial(coefficients, mod=p)
+        return tuple(x for x in range(p) if f(x) == 0)
+
+    # Compute gcd(f, x^p - x), the product of all linear factors
+    x_term = [0, 1]
+    x_to_p = _upoly_fp_powmod(x_term, p, coefficients, p)
+    linear_product = _upoly_fp_gcd(coefficients, _upoly_fp_sub(x_to_p, x_term, p), p)
+    if len(linear_product) <= 1:
+        return ()
+
+    # Factor linear product and extract roots from linear factors
+    roots = {
+        (-linear[0] * pow(linear[1], -1, p)) % p
+        for factor, degree in _cantor_zassenhaus_ddf(linear_product, p) if degree == 1
+        for linear in _cantor_zassenhaus_edf(factor, 1, p)
+    }
+
+    return tuple(roots)
+
+def _cantor_zassenhaus_ddf(f: list[int], p: int) -> list[tuple[list[int], int]]:
+    """
+    Distinct-degree factorization of polynomial f over F_p.
+
+    Returns list of (factor, degree) where factor is the product of all
+    irreducible factors of that degree.
+
+    See: https://doi.org/10.1090/S0025-5718-1981-0606517-5
+    """
+    f = _upoly_fp_monic(f, p)
+    if len(f) <= 1:
+        return []
+
+    factors = []
+    x_term = [0, 1]
+    frobenius = [0, 1]  # x^(p^i) mod f, the iterated Frobenius map
+    degree = 1
+    while 2 * degree <= len(f) - 1:
+        frobenius = _upoly_fp_powmod(frobenius, p, f, p)
+        common = _upoly_fp_gcd(_upoly_fp_sub(frobenius, x_term, p), f, p)
+        if common and len(common) > 1:
+            factors.append((common, degree))
+            f = _upoly_fp_divmod(f, common, p)[0]
+            if len(f) <= 1:
+                return factors
+            frobenius = _upoly_fp_divmod(frobenius, f, p)[1]
+        degree += 1
+
+    if f and len(f) > 1:
+        factors.append((f, len(f) - 1))
+
+    return factors
+
+def _cantor_zassenhaus_edf(f: list[int], target_degree: int, p: int) -> list[list[int]]:
+    """
+    Equal-degree factorization of polynomial f over F_p using Cantor-Zassenhaus.
+
+    Given f that is a product of irreducible polynomials all of target_degree,
+    returns the list of irreducible factors.
+
+    See: https://doi.org/10.1090/S0025-5718-1981-0606517-5
+    """
+    deg_f = len(f) - 1
+    if deg_f == target_degree:
+        return [f]
+
+    if p == 2:
+        if target_degree == 1:
+            # For p=2: f(0) = f[0] % 2, f(1) = sum(f) % 2
+            eval_f2 = lambda g, x: (g[0] if x == 0 else sum(g)) % 2 if g else 0
+            roots = [x for x in range(2) if eval_f2(f, x) == 0]
+            factors = []
+            for root in roots:
+                linear = [(-root) % 2, 1]
+                while f and eval_f2(f, root) == 0:
+                    factors.append(linear)
+                    f = _upoly_fp_divmod(f, linear, p)[0]
+                if len(f) <= 1:
+                    break
+            if len(f) > 1:
+                factors.append(f)
+            return factors
+        raise ValueError("equal-degree factorization over F_2 for d > 1 not implemented")
+
+    while True:
+        # Try gcd with random polynomial directly
+        rand = _upoly_fp_random(len(f) - 2, p)
+        common = _upoly_fp_gcd(rand, f, p)
+
+        # If no proper factor, try splitting via rand^((p^d-1)/2) - 1
+        if not (common and 1 < len(common) < len(f)):
+            exponent = (pow(p, target_degree) - 1) // 2
+            splitting = _upoly_fp_sub(_upoly_fp_powmod(rand, exponent, f, p), [1], p)
+            common = _upoly_fp_gcd(splitting, f, p)
+
+        # If we found a proper factor, recursively factor both parts
+        if common and 1 < len(common) < len(f):
+            quotient = _upoly_fp_divmod(f, common, p)[0]
+            left = _cantor_zassenhaus_edf(common, target_degree, p)
+            right = _cantor_zassenhaus_edf(quotient, target_degree, p)
+            return left + right
+
+def _upoly_fp_sub(f: list[int], g: list[int], p: int) -> list[int]:
+    """
+    Subtract univariate polynomials over F_p. Returns f - g.
+    """
+    difference = [(a - b) % p for a, b in itertools.zip_longest(f, g, fillvalue=0)]
+    while difference and difference[-1] == 0: difference.pop()
+    return difference
+
+def _upoly_fp_mul(f: list[int], g: list[int], p: int) -> list[int]:
+    """
+    Multiply univariate polynomials over F_p. Returns f * g.
+    """
+    if not f or not g:
+        return []
+
+    product = [0] * (len(f) + len(g) - 1)
+    for i, coefficient_f in enumerate(f):
+        if coefficient_f:
+            for j, coefficient_g in enumerate(g):
+                product[i + j] = (product[i + j] + coefficient_f * coefficient_g) % p
+
+    while product and product[-1] == 0: product.pop()
+    return product
+
+def _upoly_fp_divmod(f: list[int], g: list[int], p: int) -> tuple[list[int], list[int]]:
+    """
+    Univariate polynomial division with remainder over F_p. Returns (f / g, f % g).
+    """
+    if not g:
+        raise ZeroDivisionError("polynomial division by zero")
+
+    remainder, g = f[:], g[:]
+    while g and g[-1] == 0: g.pop()
+    if not remainder or len(remainder) < len(g):
+        return [], remainder
+
+    inv_lead = pow(g[-1], -1, p)
+    quotient = [0] * (len(remainder) - len(g) + 1)
+    while remainder and len(remainder) >= len(g):
+        c = remainder[-1] * inv_lead % p
+        degree = len(remainder) - len(g)
+        quotient[degree] = c
+        if c:
+            for i in range(len(g)):
+                remainder[degree + i] = (remainder[degree + i] - c * g[i]) % p
+        while remainder and remainder[-1] == 0:
+            remainder.pop()
+
+    while quotient and quotient[-1] == 0: quotient.pop()
+    return quotient, remainder
+
+def _upoly_fp_monic(f: list[int], p: int) -> list[int]:
+    """
+    Make univariate polynomial monic over F_p.
+    """
+    if not f:
+        return []
+    inv = pow(f[-1], -1, p)
+    return f if inv == 1 else [(c * inv) % p for c in f]
+
+def _upoly_fp_gcd(f: list[int], g: list[int], p: int) -> list[int]:
+    """
+    Univariate polynomial GCD over F_p, returned as monic.
+    """
+    while g:
+        f, g = g, _upoly_fp_divmod(f, g, p)[1]
+    return _upoly_fp_monic(f, p)
+
+def _upoly_fp_powmod(base: list[int], exponent: int, g: list[int], p: int) -> list[int]:
+    """
+    Univariate polynomial exponentiation mod g over F_p via binary exponentiation.
+    """
+    result = [1]
+    base = _upoly_fp_divmod(base, g, p)[1]
+    while exponent > 0:
+        if exponent & 1:
+            result = _upoly_fp_divmod(_upoly_fp_mul(result, base, p), g, p)[1]
+        exponent >>= 1
+        if exponent:
+            base = _upoly_fp_divmod(_upoly_fp_mul(base, base, p), g, p)[1]
+    return result
+
+def _upoly_fp_random(max_degree: int, p: int) -> list[int]:
+    """
+    Generate a random non-zero univariate polynomial over F_p.
+    """
+    while True:
+        coefficients = [secrets.randbelow(p) for _ in range(max_degree + 1)]
+        if any(coefficients):
+            while coefficients and coefficients[-1] == 0: coefficients.pop()
+            return coefficients
 
 def _nth_roots_mod_prime(a: int, n: int, p: int) -> tuple[int, ...]:
     """
