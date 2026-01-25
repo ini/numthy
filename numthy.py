@@ -39,7 +39,8 @@ __all__ = [
     'perfect_power', 'prime_factors', 'prime_factorization', 'divisors',
     # Arithmetic Functions
     'omega', 'big_omega', 'divisor_count', 'divisor_sum', 'divisor_function',
-    'radical', 'mobius', 'totient', 'carmichael', 'valuation', 'multiplicative_range',
+    'partition', 'radical', 'mobius', 'totient', 'carmichael', 'valuation',
+    'multiplicative_range',
     # Modular Arithmetic
     'egcd', 'crt', 'coprimes', 'multiplicative_order', 'primitive_root',
     'legendre', 'jacobi', 'kronecker', 'dirichlet_character',
@@ -53,7 +54,6 @@ __all__ = [
     'lll_reduce', 'bkz_reduce', 'closest_vector', 'small_roots',
     # Sequences
     'lucas', 'fibonacci', 'fibonacci_index', 'polygonal', 'polygonal_index',
-    'partition',
     # Appendix
     'integers', 'integer_pairs', 'alternating', 'below', 'lower_bound', 'permutation',
     'is_square', 'iroot', 'ilog', 'periodic_continued_fraction', 'convergents', 
@@ -434,7 +434,7 @@ def _baillie_psw(n: int) -> bool:
 
     # Find a suitable D for the extra-strong Lucas test (D = P^2 - 4Q with Q = 1)
     P = 3
-    while jacobi(D := P*P - 4, n) != -1:
+    while jacobi(P*P - 4, n) != -1:
         P += 1
 
     # Write n + 1 = 2^s * d with d odd
@@ -2015,6 +2015,30 @@ def divisor_function(n: int, k: int = 1) -> int:
     else:
         return prod((pow(p, k * (e + 1)) - 1) // (pow(p, k) - 1) for p, e in pf.items())
 
+def partition(
+    n: int,
+    mod: int | None = None,
+    restrict: Callable[[int], bool] | None = None,
+) -> int:
+    """
+    Return the value of the partition function p(n).
+
+    Parameters
+    ----------
+    n : int
+        Integer to partition
+    mod : int | None
+        If provided, return p(n) mod m
+    restrict : Callable(int) -> bool
+        Function indicating integers that can be used in the partition,
+        where restrict(k) = True means integer k can be used
+    """
+    if n < 0:
+        raise ValueError("n must be a non-negative integer")
+
+    p = _euler_transform(restrict) if restrict else _partition_function(mod)
+    return p(n) if mod is None or restrict is None else p(n) % mod
+
 def radical(n: int) -> int:
     """
     Compute rad(n) as the product of the distinct prime factors of n.
@@ -2190,6 +2214,64 @@ def multiplicative_range(f: Callable[..., int], N: int, f0: int = 1) -> list[int
         values[n] = values[n // prime_power[n]] * f_prime_power(p, prime_exponent[n])
 
     return values
+
+@small_cache
+def _partition_function(mod: int | None) -> Callable[[int], int]:
+    """
+    Return a callable partition function p(n) for given modulus.
+    """
+    partitions, pentagonals, k = [1], [], 1
+
+    def p(n: int) -> int:
+        nonlocal k
+        while (m := len(partitions)) <= n:
+            # Extend generalized pentagonal numbers k(3k ± 1)/2
+            while not pentagonals or pentagonals[-1][1] <= m:
+                sign = 1 if k % 2 == 1 else -1
+                pentagonals.append((sign, k * (3 * k - 1) // 2))
+                pentagonals.append((sign, k * (3 * k + 1) // 2))
+                k += 1
+
+            # Use Euler's recurrence: p(m) = Σ sign * p(m - offset)
+            total = 0
+            for sign, offset in pentagonals:
+                if offset > m: break
+                total += sign * partitions[m - offset]
+
+            partitions.append(total if mod is None else total % mod)
+
+        return partitions[n]
+
+    return p
+
+@small_cache
+def _euler_transform(a: Callable[[int], int]) -> Callable[[int], int]:
+    """
+    Return the Euler transform of integer sequence a.
+
+    Parameters
+    ----------
+    a : Callable(int) -> int
+        Integer sequence to transform
+    """
+    b_values = [1]
+
+    @lru_cache(maxsize=None)
+    def c(n: int) -> int:
+        return sum(d * a(d) for d in divisors(n))
+
+    def b(n: int) -> int:
+        while len(b_values) <= n:
+            i = len(b_values)
+            total = c(i)
+            for k in range(1, i):
+                total += c(k) * b_values[i - k]
+
+            b_values.append(total // i)
+
+        return b_values[n]
+
+    return b
 
 def _prime_factor_range(N: int) -> list[int]:
     """
@@ -5749,88 +5831,6 @@ def polygonal_index(s: int, n: int) -> int:
         return n
 
     return (isqrt(8 * n * (s - 2) + (s - 4) * (s - 4)) + s - 4) // (2 * (s - 2))
-
-def partition(
-    n: int,
-    mod: int | None = None,
-    restrict: Callable[[int], bool] | None = None,
-) -> int:
-    """
-    Return the n-th partition number p(n).
-
-    Parameters
-    ----------
-    n : int
-        Integer to partition
-    mod : int | None
-        If provided, return p(n) mod m
-    restrict : Callable(int) -> bool
-        Function indicating integers that can be used in the partition,
-        where restrict(k) = True means integer k can be used
-    """
-    if n < 0:
-        raise ValueError("n must be a non-negative integer")
-
-    p = _euler_transform(restrict) if restrict else _partition_function(mod)
-    return p(n) if mod is None or restrict is None else p(n) % mod
-
-@small_cache
-def _partition_function(mod: int | None) -> Callable[[int], int]:
-    """
-    Return a callable partition function p(n) for given modulus.
-    """
-    partitions, pentagonals, k = [1], [], 1
-
-    def p(n: int) -> int:
-        nonlocal k
-        while (m := len(partitions)) <= n:
-            # Extend generalized pentagonal numbers k(3k ± 1)/2
-            while not pentagonals or pentagonals[-1][1] <= m:
-                sign = 1 if k % 2 == 1 else -1
-                pentagonals.append((sign, k * (3 * k - 1) // 2))
-                pentagonals.append((sign, k * (3 * k + 1) // 2))
-                k += 1
-
-            # Use Euler's recurrence: p(m) = Σ sign * p(m - offset)
-            total = 0
-            for sign, offset in pentagonals:
-                if offset > m: break
-                total += sign * partitions[m - offset]
-
-            partitions.append(total if mod is None else total % mod)
-
-        return partitions[n]
-
-    return p
-
-@small_cache
-def _euler_transform(a: Callable[[int], int]) -> Callable[[int], int]:
-    """
-    Return the Euler transform of integer sequence a.
-
-    Parameters
-    ----------
-    a : Callable(int) -> int
-        Integer sequence to transform
-    """
-    b_values = [1]
-
-    @lru_cache(maxsize=None)
-    def c(n: int) -> int:
-        return sum(d * a(d) for d in divisors(n))
-
-    def b(n: int) -> int:
-        while len(b_values) <= n:
-            i = len(b_values)
-            total = c(i)
-            for k in range(1, i):
-                total += c(k) * b_values[i - k]
-
-            b_values.append(total // i)
-
-        return b_values[n]
-
-    return b
 
 
 
