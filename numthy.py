@@ -36,7 +36,7 @@ __all__ = [
     # Primes
     'is_prime', 'next_prime', 'random_prime', 'primes', 'count_primes', 'sum_primes',
     # Factorization
-    'prime_factors', 'prime_factorization', 'divisors',
+    'perfect_power', 'prime_factors', 'prime_factorization', 'divisors',
     # Arithmetic Functions
     'omega', 'big_omega', 'divisor_count', 'divisor_sum', 'divisor_function',
     'radical', 'mobius', 'totient', 'carmichael', 'valuation', 'multiplicative_range',
@@ -44,7 +44,7 @@ __all__ = [
     'egcd', 'crt', 'coprimes', 'multiplicative_order', 'primitive_root',
     'legendre', 'jacobi', 'kronecker', 'dirichlet_character',
     # Nonlinear Congruences
-    'hensel', 'discrete_log', 'modular_roots',
+    'hensel', 'nth_roots', 'discrete_log',
     # Diophantine Equations
     'bezout', 'cornacchia', 'pell', 'conic', 'pythagorean_triples', 'pillai',
     # Algebraic Systems
@@ -55,9 +55,9 @@ __all__ = [
     'lucas', 'fibonacci', 'fibonacci_index', 'polygonal', 'polygonal_index',
     'partition',
     # Appendix
-    'integers', 'integer_pairs', 'alternating', 'below',
-    'periodic_continued_fraction', 'convergents', 'euler_transform', 'permutation',
-    'polynomial', 'iroot', 'ilog', 'is_square', 'perfect_power', 'binary_search',
+    'integers', 'integer_pairs', 'alternating', 'below', 'lower_bound', 'permutation',
+    'is_square', 'iroot', 'ilog', 'periodic_continued_fraction', 'convergents', 
+    'polynomial',
 ]
 
 _NoSolutionError = type('_NoSolutionError', (Exception,), {})
@@ -280,12 +280,10 @@ def count_primes(x: int) -> int:
     """
     if x < 10000:
         return sum(1 for _ in primes(high=x))
-    elif x < 1_000_000:
-        return _lmo(x, k=5, c=0.015)
-    elif x < 1_000_000_000:
-        return _lmo(x, k=5, c=0.008)
-    else:
-        return _lmo(x, k=15, c=0.003)
+
+    thresholds = [(1000000, (5, 0.015)), (1000000000, (5, 0.008))]
+    k, c = _threshold_select(x, thresholds, default=(15, 0.003))
+    return _lmo(x, k=k, c=c)
 
 def sum_primes(
     x: int,
@@ -320,14 +318,10 @@ def sum_primes(
 
     if x < 10000:
         return sum(f(p) for p in primes(high=x))
-    elif x < 100000:
-        return _lmo(x, k=5, c=0.025, f=f, f_prefix_sum=f_prefix_sum)
-    elif x < 1_000_000:
-        return _lmo(x, k=5, c=0.015, f=f, f_prefix_sum=f_prefix_sum)
-    elif x < 10_000_000:
-        return _lmo(x, k=5, c=0.01, f=f, f_prefix_sum=f_prefix_sum)
-    else:
-        return _lmo(x, k=15, c=0.005, f=f, f_prefix_sum=f_prefix_sum)
+
+    thresholds = [(100000, (5, 0.025)), (1000000, (5, 0.015)), (10000000, (5, 0.01))]
+    k, c = _threshold_select(x, thresholds, default=(15, 0.005))
+    return _lmo(x, k=k, c=c, f=f, f_prefix_sum=f_prefix_sum)
 
 def _miller_rabin(n: int, bases: Iterable[int] | int = (2,)) -> bool:
     """
@@ -948,6 +942,33 @@ def _primorial(n: int) -> int:
 ############################ Factorization #############################
 ########################################################################
 
+def perfect_power(n: int) -> tuple[int, int]:
+    """
+    Find integers a, b such that a^b = n.
+
+    Returns the solution (a, b) with minimal b > 1 if there are any such solutions,
+    otherwise returns the trivial solution (n, 1).
+
+    Parameters
+    ----------
+    n : int
+        Integer target
+    """
+    if n in (0, 1):
+        return (n, 2)
+    if n == -1:
+        return (-1, 3)
+
+    n = -n if (is_negative := n < 0) else n
+    if not is_negative and (r := isqrt(n)) * r == n:
+        return (r, 2)
+    for p in primes(low=3, high=n.bit_length()-1):
+        r = iroot(n, p)
+        if pow(r, p) == n:
+            return ((-r if is_negative else r), p)
+
+    return (-n if is_negative else n, 1)
+
 def prime_factors(n: int) -> tuple[int, ...]:
     """
     Get all prime factors of n in sorted order (with multiplicity).
@@ -1059,12 +1080,10 @@ def _gen_prime_factors(n: int) -> Iterator[int]:
                 if 1 < d < n:
                     stack.extend([d, n // d])
                     break
+                elif _miller_rabin(n, 64):
+                    yield n
+                    break
                 else:
-                    # Retest primality with 64 rounds of Miller-Rabin
-                    if _miller_rabin(n, 64):
-                        yield n
-                        break
-
                     # Increase search parameters
                     B = int((B or 60000) * 1.25)
                     max_polynomial_count = int((max_polynomial_count or 60000) * 1.25)
@@ -1250,12 +1269,11 @@ def _ecm(
     B1, B2 = B1 or defaults[0], B2 or defaults[1]
     max_curves = max_curves or defaults[2]
 
-    # Precompute prime powers p^e <= B1
+    # Precomputation
     prime_powers = _ecm_prime_powers(B1)
-
-    # Precompute stage 2 plan (shared across curves)
     plan = _ecm_stage_2_plan(B1, B2)
 
+    # Loop over elliptic curves
     for _ in range(max_curves):
         # Pick a random curve
         sigma = secrets.randbelow(n - 7) + 6 if n > 7 else 6
@@ -1899,9 +1917,7 @@ def _nullspace_gf2(rows: list[int]) -> list[int]:
     Find null space of the matrix over GF(2) using Gaussian elimination.
     Rows are bit-packed integers.
     """
-    pivots = {}
-    nullspace = []
-
+    pivots, nullspace = {}, []
     for i, row in enumerate(rows):
         combo = 1 << i
         r = row
@@ -2515,7 +2531,7 @@ def _bach(p: int) -> int:
     Use Bach's primitive root finding algorithm to search for
     a primitive root modulo p, where p is prime.
 
-    See: https://www.jstor.org/stable/2153696
+    See: https://doi.org/10.1090/S0025-5718-97-00890-9
 
     Complexity
     ----------
@@ -2529,7 +2545,7 @@ def _bach(p: int) -> int:
     # Find B such that B log(B) = 30 log(p)
     log_p = ilog(p - 1) + 1  # ⌈log(p)⌉
     log_log_p = ilog(log_p - 1) + 1  # ⌈log⌈log(p)⌉⌉
-    B = binary_search(lambda x: x * ilog(x), 30 * log_p, low=1)
+    B = lower_bound(lambda x: x * ilog(x), 30 * log_p, low=1)
 
     # Factor φ(p) = p - 1
     pf = prime_factorization(p - 1)
@@ -2703,12 +2719,12 @@ def hensel(
         new_solutions, new_mod = set(), mod * p
         for root in solutions:
             f_val = f(root) % new_mod
-            f_coeff, df_mod = (f_val // mod) % p, df(root) % p
+            f_coefficient, df_mod = (f_val // mod) % p, df(root) % p
             if df_mod != 0:
                 # Simple root, unique lift
-                t = (-f_coeff * pow(df_mod, -1, p)) % p
+                t = (-f_coefficient * pow(df_mod, -1, p)) % p
                 new_solutions.add((root + t*mod) % new_mod)
-            elif f_coeff == 0:
+            elif f_coefficient == 0:
                 # Multiple root, p lifts
                 new_solutions.update((root + t*mod) % new_mod for t in range(p))
 
@@ -2717,6 +2733,45 @@ def hensel(
             break
 
     return tuple(root % mod for root in solutions)
+
+def nth_roots(a: int, n: int, mod: int) -> tuple[int, ...]:
+    """
+    Find all solutions x to x^n ≡ a (mod m).
+
+    Uses the Tonelli-Shanks / Adleman-Manders-Miller to find roots modulo primes,
+    Hensel lifting to roots modulo prime powers, and the Chinese Remainder Theorem
+    to combine solutions.
+
+    Parameters
+    ----------
+    a : int
+        Target integer
+    n : int
+        Order of root
+    mod : int
+        Modulus
+    """
+    if n <= 0:
+        raise ValueError("n must be a positive integer")
+
+    # Coefficients to the polynomial f(x) = x^n - a
+    coefficients = [-a] + [0]*(n - 1) + [1]
+
+    # Find roots modulo prime powers
+    residue_sets, moduli = [], []
+    for p, e in prime_factorization(abs(mod)).items():
+        roots = _nth_roots_mod_prime(a, n, p)
+        roots = roots if e == 1 else hensel(coefficients, p, e, initial=roots)
+        if not roots:
+            return ()
+        residue_sets.append(tuple(roots))
+        moduli.append(p**e)
+
+    # Combine solutions via Chinese Remainder Theorem
+    return tuple(
+        crt(zip(residues, moduli))
+        for residues in itertools.product(*residue_sets)
+    )
 
 def discrete_log(a: int, b: int, mod: int) -> int | None:
     """
@@ -2776,47 +2831,181 @@ def discrete_log(a: int, b: int, mod: int) -> int | None:
     x = crt(congruences)
     return None if x is None else x + offset
 
-def modular_roots(n: int, k: int, mod: int) -> tuple[int, ...]:
+def _nth_roots_mod_prime(a: int, n: int, p: int) -> tuple[int, ...]:
     """
-    Find all solutions x to x^k ≡ n (mod m).
+    Find all solutions x to x^n ≡ a (mod p), where p is prime.
 
-    Uses the Tonelli-Shanks / Adleman-Manders-Miller to find roots modulo primes,
-    Hensel lifting to roots modulo prime powers, and the Chinese Remainder Theorem
-    to combine solutions.
-
-    Parameters
-    ----------
-    n : int
-        Target integer
-    k : int
-        Order of root
-    mod : int
-        Modulus
+    Uses the Tonelli-Shanks algorithm when n = 2,
+    or the Adleman-Manders-Miller (AMM) algorithm otherwise.
     """
-    if k <= 0:
-        raise ValueError("k must be a positive integer")
-
-    # Coefficients to the polynomial f(x) = x^k - n
-    coefficients = [-n] + [0]*(k - 1) + [1]
-
-    # Find roots modulo prime powers
-    residue_sets, moduli = [], []
-    for p, e in prime_factorization(abs(mod)).items():
-        roots_mod_prime = _modular_roots_mod_prime(n, k, p)
-        if e > 1:
-            roots_mod_prime_power = hensel(coefficients, p, e, initial=roots_mod_prime)
-        else:
-            roots_mod_prime_power = roots_mod_prime
-        if not roots_mod_prime_power:
+    a %= p
+    if n == 1 or a == 0 or p == 2:
+        return (a,)
+    elif n == 2:
+        try:
+            r = _tonelli_shanks(a, p)
+            return (r, -r % p)
+        except _NoSolutionError:
             return ()
-        residue_sets.append(tuple(roots_mod_prime_power))
-        moduli.append(p**e)
 
-    # Combine solutions via Chinese Remainder Theorem
-    return tuple(
-        crt(zip(residues, moduli))
-        for residues in itertools.product(*residue_sets)
+    # Use the generalized Euler criterion to test for the existence of an n-th root
+    g = gcd(n, p - 1)
+    if pow(a, (p - 1) // g, p) != 1:
+        return ()
+
+    # If gcd(n, p-1) = 1, unique root via exponent inversion
+    if g == 1:
+        e = pow(n, -1, p - 1)
+        return (pow(a, e, p),)
+
+    # Reduce to a g-th root
+    # n = g*n1, p-1 = g*m, gcd(n1, m)=1.
+    n1, m = n // g, (p - 1) // g
+    inv_n1 = pow(n1, -1, m)
+
+    # We have y^n1 = a (because a^m=1 and inv_n1*n1 = 1 (mod m))
+    y = pow(a, inv_n1, p)
+
+    # Solve x^g = y by extracting prime roots along the factorization of g
+    pf = prime_factorization(g)
+    x = y
+    for r, exp in pf.items():
+        for _ in range(exp):
+            if r == 2:
+                x = _tonelli_shanks(x, p)
+            else:
+                x = _adleman_manders_miller(x, r, p)
+
+    # Find the root of unity ζ^n=1
+    e = (p - 1) // g
+    omega = next(
+        w for a in range(2, p)
+        if (w := pow(a, e, p)) != 1
+        and all(pow(w, g // q, p) != 1 for q in pf)
     )
+
+    # Now enumerate all n-th roots
+    # The set of solutions is {x*ζ where ζ^n = 1}, which is a subgroup of size g
+    roots, w = [], 1
+    for _ in range(g):
+        roots.append((x * w) % p)
+        w = (w * omega) % p
+
+    return tuple(roots)
+
+def _tonelli_shanks(a: int, p: int) -> int:
+    """
+    Tonelli-Shanks algorithm for finding modular square roots.
+    Returns a root r such that r² ≡ a (mod p).
+
+    See: https://www.cmat.edu.uy/~tornaria/pub/Tornaria-2002.pdf
+
+    Complexity
+    ----------
+    O(log p + s²) ⊆ O(log²p) expected multiplications, where p - 1 = 2ˢ * q with q odd
+    """
+    a %= p
+    if a == 0:
+        return 0
+    elif p == 2:
+        return a
+    elif p % 4 == 3:
+        r = pow(a, (p + 1) // 4, p)
+        if r*r % p == a:
+            return r
+        else:
+            raise _NoSolutionError("No solution exists")
+
+    # Write p - 1 as 2^s * q with q odd (by factoring out powers of 2)
+    s, q = 0, p - 1
+    while q % 2 == 0:
+        q //= 2
+        s += 1
+
+    # Find a quadratic non-residue
+    if p % 8 == 5:
+        z = 2
+    else:
+        # For odd n and p = 1 (mod 4), (p | n) = (n | p) due to quadratic reciprocity
+        z = next(n for n in range(3, p, 2) if jacobi(p, n) == -1)
+
+    # Iterative computation to calculate square root
+    # Maintain invariant R^2 ≡ a * t (mod p) until t = 1
+    M, c, t, R = s, pow(z, q, p), pow(a, q, p), pow(a, (q+1)//2, p)
+    while t != 1:
+        i, power = 1, (t*t) % p
+        while power != 1:
+            power = (power*power) % p
+            i += 1
+
+        if i >= M:
+            raise _NoSolutionError("No solution exists")
+
+        b = pow(c, 2**(M-i-1), p)  # root of unity of order 2^(i+1)
+        M = i  # ord(t) = 2^M
+        c = (b*b) % p  # root of unity of order 2^i
+        t = (t*c) % p  # reduce order of t
+        R = (R*b) % p  # update root candidate, maintains R^2 ≡ a * t (mod p)
+
+    return R
+
+def _adleman_manders_miller(delta: int, r: int, p: int) -> int:
+    """
+    Adleman-Manders-Miller r-th root extraction in finite field Fₚ when r | (p - 1).
+    Returns a single root x with x^r = delta (mod p).
+
+    See: https://arxiv.org/pdf/1111.4877
+    See: https://www.cs.cmu.edu/~glmiller/Publications/AMM77.pdf
+
+    Complexity
+    ----------
+    O(t² log r + tr) multiplications, where p - 1 = rᵗ * s
+    """
+    delta %= p
+    if delta == 0:
+        return 0
+    if r == 1:
+        return delta
+    if (p - 1) % r != 0:
+        raise ValueError("Must have (p - 1) = 0 (mod r)")
+
+    # Use the generalized Euler criterion to test for the existence of an r-th root
+    if pow(delta, (p - 1) // r, p) != 1:
+        raise _NoSolutionError("No solution exists")
+
+    # Write p - 1 = r^t * s with gcd(r, s) = 1
+    t, s = 0, p - 1
+    while s % r == 0:
+        s //= r
+        t += 1
+
+    # Find the smallest α >= 0 such that s | (rα - 1)
+    alpha = 0 if s == 1 else pow(r, -1, s)
+
+    # If t = 1 then δ^α is already an r-th root
+    if t == 1:
+        return pow(delta, alpha, p)
+
+    # Find an r-th non-residue rho
+    rho = next(i for i in range(2, p) if pow(i, (p - 1) // r, p) != 1)
+
+    # Initialize algorithm variables
+    a = pow(rho, r**(t - 1) * s, p)  # generator of r-th roots of unity (order r)
+    b = pow(delta, r*alpha - 1, p)  # satisfies b^(r^(t-1)) = 1
+    c = pow(rho, s, p)  # root of unity of order dividing r^t
+    h = 1  # accumulates correction factor
+
+    # Iterative computation to calculate an r-th root
+    # Maintain invariants b^(r^(t-1)) = 1 (mod p)
+    # and (δ^α * h)^r = δ * b^(r^(t-i)) (mod p)
+    for i in range(1, t):
+        d = pow(b, r**(t - 1 - i), p)
+        j = -discrete_log(d, a, p) % r
+        h = (h * pow(c, j, p)) % p
+        c = pow(c, r, p)
+        b = (b * pow(c, j, p)) % p
+
+    return (pow(delta, alpha, p) * h) % p
 
 def _discrete_log_mod_prime_power(a: int, b: int, p: int, e: int) -> tuple[int, int]:
     """
@@ -3032,182 +3221,6 @@ def _pollard_rho_log(h: int, g: int, mod: int, p: int, partition_size: int = 32)
                 x_t, a_t, b_t = x, a, b
                 interval, cycle_length = interval * 2, 0
 
-def _modular_roots_mod_prime(n: int, k: int, p: int) -> tuple[int, ...]:
-    """
-    Find all solutions x to x^k ≡ n (mod p), where p is prime.
-
-    Uses the Tonelli-Shanks algorithm when k = 2,
-    or the Adleman-Manders-Miller (AMM) algorithm otherwise.
-    """
-    n %= p
-    if k == 1 or n == 0 or p == 2:
-        return (n,)
-    elif k == 2:
-        try:
-            r = _tonelli_shanks(n, p)
-            return (r, -r % p)
-        except _NoSolutionError:
-            return ()
-
-    # Use the generalized Euler criterion to test for the existence of a k-th root
-    g = gcd(k, p - 1)
-    if pow(n, (p - 1) // g, p) != 1:
-        return ()
-
-    # If gcd(k, p-1) = 1, unique root via exponent inversion
-    if g == 1:
-        e = pow(k, -1, p - 1)
-        return (pow(n, e, p),)
-
-    # Reduce to a g-th root
-    # k = g*k1, p-1 = g*m, gcd(k1, m)=1.
-    k1, m = k // g, (p - 1) // g
-    inv_k1 = pow(k1, -1, m)
-
-    # y^k1 = n (because n^(N/g)=1 and inv_k1*k1 = 1 (mod m))
-    y = pow(n, inv_k1, p)
-
-    # Solve x^g = y by extracting prime roots along the factorization of g
-    pf = prime_factorization(g)
-    x = y
-    for r, exp in pf.items():
-        for _ in range(exp):
-            if r == 2:
-                x = _tonelli_shanks(x, p)
-            else:
-                x = _adleman_manders_miller(x, r, p)
-
-    # Find the root of unity ζ^k=1
-    e = (p - 1) // g
-    omega = next(
-        w for a in range(2, p)
-        if (w := pow(a, e, p)) != 1
-        and all(pow(w, g // q, p) != 1 for q in pf)
-    )
-
-    # Now enumerate all k-th roots
-    # The set of solutions is {x*ζ where ζ^k = 1}, which is a subgroup of size g
-    roots, w = [], 1
-    for _ in range(g):
-        roots.append((x * w) % p)
-        w = (w * omega) % p
-
-    return tuple(roots)
-
-def _tonelli_shanks(n: int, p: int) -> int:
-    """
-    Tonelli-Shanks algorithm for finding modular square roots.
-    Returns a root r such that r² ≡ n (mod p).
-
-    See: https://www.cmat.edu.uy/~tornaria/pub/Tornaria-2002.pdf
-
-    Complexity
-    ----------
-    O(log p + s²) ⊆ O(log²p) expected multiplications, where p - 1 = 2ˢ * q with q odd
-    """
-    n %= p
-    if n == 0:
-        return 0
-    elif p == 2:
-        return n
-    elif p % 4 == 3:
-        r = pow(n, (p + 1) // 4, p)
-        if r*r % p == n:
-            return r
-        else:
-            raise _NoSolutionError("No solution exists")
-
-    # Write p - 1 as 2^s * q with q odd (by factoring out powers of 2)
-    s, q = 0, p - 1
-    while q % 2 == 0:
-        q //= 2
-        s += 1
-
-    # Find a quadratic non-residue
-    if p % 8 == 5:
-        z = 2
-    else:
-        # When p = 1 (mod 4), (p | a) = (a | p) due to quadratic reciprocity
-        z = next(a for a in range(3, p, 2) if jacobi(p, a) == -1)
-
-    # Iterative computation to calculate square root
-    # Maintain invariant R^2 ≡ n * t (mod p) until t = 1
-    M, c, t, R = s, pow(z, q, p), pow(n, q, p), pow(n, (q+1)//2, p)
-    while t != 1:
-        i, power = 1, (t*t) % p
-        while power != 1:
-            power = (power*power) % p
-            i += 1
-
-        if i >= M:
-            raise _NoSolutionError("No solution exists")
-
-        b = pow(c, 2**(M-i-1), p)  # root of unity of order 2^(i+1)
-        M = i  # ord(t) = 2^M
-        c = (b*b) % p  # root of unity of order 2^i
-        t = (t*c) % p  # reduce order of t
-        R = (R*b) % p  # update root candidate, maintains R^2 ≡ n * t (mod p)
-
-    return R
-
-def _adleman_manders_miller(delta: int, r: int, p: int) -> int:
-    """
-    Adleman-Manders-Miller r-th root extraction in finite field Fₚ when r | (p - 1).
-    Returns a single root x with x^r = delta (mod p).
-
-    See: https://arxiv.org/pdf/1111.4877
-    See: https://www.cs.cmu.edu/~glmiller/Publications/AMM77.pdf
-
-    Complexity
-    ----------
-    O(t² log r + tr) multiplications, where p - 1 = rᵗ * s
-    """
-    delta %= p
-    if delta == 0:
-        return 0
-    if r == 1:
-        return delta
-    if (p - 1) % r != 0:
-        raise ValueError("Must have (p - 1) = 0 (mod r)")
-
-    # Use the generalized Euler criterion to test for the existence of an r-th root
-    if pow(delta, (p - 1) // r, p) != 1:
-        raise _NoSolutionError("No solution exists")
-
-    # Write p - 1 = r^t * s with gcd(r, s) = 1
-    t, s = 0, p - 1
-    while s % r == 0:
-        s //= r
-        t += 1
-
-    # Find the smallest α >= 0 such that s | (rα - 1)
-    alpha = 0 if s == 1 else pow(r, -1, s)
-
-    # If t = 1 then δ^α is already an r-th root
-    if t == 1:
-        return pow(delta, alpha, p)
-
-    # Find an r-th non-residue rho
-    rho = next(i for i in range(2, p) if pow(i, (p - 1) // r, p) != 1)
-
-    # Initialize algorithm variables
-    a = pow(rho, r**(t - 1) * s, p)  # generator of r-th roots of unity (order r)
-    b = pow(delta, r*alpha - 1, p)  # satisfies b^(r^(t-1)) = 1
-    c = pow(rho, s, p)  # root of unity of order dividing r^t
-    h = 1  # accumulates correction factor
-
-    # Iterative computation to calculate an r-th root
-    # Maintain invariants b^(r^(t-1)) = 1 (mod p)
-    # and (δ^α * h)^r = δ * b^(r^(t-i)) (mod p)
-    for i in range(1, t):
-        d = pow(b, r**(t - 1 - i), p)
-        j = -discrete_log(d, a, p) % r
-        h = (h * pow(c, j, p)) % p
-        c = pow(c, r, p)
-        b = (b * pow(c, j, p)) % p
-
-    return (pow(delta, alpha, p) * h) % p
-
 def _multiplicative_order_mod_odd_prime_power(a: int, p: int, e: int) -> int:
     """
     Return the smallest integer k = ord_n(a) such that a^k ≡ 1 (mod n),
@@ -3333,7 +3346,7 @@ def cornacchia(d: int, m: int) -> Iterator[tuple[int, int]]:
     for g in factors:
         n = m // (g * g)
         sqrt_n = isqrt(n)
-        for r in modular_roots(-d, 2, mod=n):
+        for r in nth_roots(-d, 2, mod=n):
             if r > n // 2:
                 r = n - r
 
@@ -3421,7 +3434,7 @@ def pell(D: int, N: int = 1) -> Iterator[tuple[int, int]]:
 
         # Iterate over modular roots
         m = abs(m)
-        for z in modular_roots(D, 2, mod=m):
+        for z in nth_roots(D, 2, mod=m):
             z = z if z <= m // 2 else z - m
             a, initial, period = periodic_continued_fraction(D, P=z, Q=m)
             a = [next(a) for _ in range(initial + period)]
@@ -3703,7 +3716,7 @@ def _parabola(*coefficients: int) -> Iterator[tuple[int, int]]:
                     yield (x, y)
 
         # We have a family of solutions for each residue z such that z^2 = B (mod |A|)
-        residues = sorted(modular_roots(B, 2, abs(A)))
+        residues = sorted(nth_roots(B, 2, abs(A)))
         yield from alternating(*(family(r) for r in residues))
 
 def _ellipse(*coefficients: int) -> Iterator[tuple[int, int]]:
@@ -4167,7 +4180,7 @@ def _bareiss(A: Matrix[int], b: Vector[int]) -> list[int] | None:
     """
     Use the Bareiss algorithm to find an integer solution to Ax = b for square matrix A.
 
-    See: https://www.jstor.org/stable/2004533
+    See: https://doi.org/10.1090/S0025-5718-1968-0226829-0
 
     Complexity
     ----------
@@ -4389,7 +4402,7 @@ def _poly_make_monic(f: Polynomial) -> Polynomial[Fraction]:
     if not (f := {m: Fraction(c) for m, c in f.items() if c}): return {}
     return f if (lead_c := f[max(f)]) == 1 else {m: c / lead_c for m, c in f.items()}
 
-def _poly_univariate_coeffs(
+def _poly_univariate_coefficients(
     f: Polynomial[int],
     variable_index: int,
 ) -> list[int] | None:
@@ -4397,16 +4410,16 @@ def _poly_univariate_coeffs(
     Extract univariate coefficients for variable at index, or None if not univariate.
     """
     if not f or not (0 <= variable_index < _poly_num_variables(f)): return None
-    coeffs = [0] * (max(monomial[variable_index] for monomial in f) + 1)
+    coefficients = [0] * (max(monomial[variable_index] for monomial in f) + 1)
     for monomial, c in f.items():
         if any(e and i != variable_index for i, e in enumerate(monomial)):
             return None
-        coeffs[monomial[variable_index]] += c
+        coefficients[monomial[variable_index]] += c
 
-    while len(coeffs) > 1 and coeffs[-1] == 0:
-        coeffs.pop()
+    while len(coefficients) > 1 and coefficients[-1] == 0:
+        coefficients.pop()
 
-    return coeffs
+    return coefficients
 
 def _poly_substitute(f: Polynomial, variable_index: int, value: int) -> Polynomial:
     """
@@ -4571,7 +4584,7 @@ def _solve_polynomial_system(
             ((i, coefficients), (len(coefficients), bound, len(f)))
             for f in polynomials
             for i, bound in enumerate(bounds)
-            if (coefficients := _poly_univariate_coeffs(f, i))
+            if (coefficients := _poly_univariate_coefficients(f, i))
         ]
         return min(candidates, key=lambda x: x[1])[0] if candidates else None
 
@@ -4734,16 +4747,17 @@ def closest_vector(B: Matrix[int], target: Vector[int]) -> Vector[int]:
     # Compute Gram-Schmidt orthogonalization
     _, bstar, bstar_squared_norm = _gso(B)
     y = [float(x) for x in target]
-    coeffs = [0] * n
+    coefficients = [0] * n
 
     # Project target onto each orthogonal component and round to nearest integer
     for i in reversed(range(n)):
         if bstar_squared_norm[i] > 0:
-            c = coeffs[i] = _nearest_int(_dot(y, bstar[i]) / bstar_squared_norm[i])
+            c = _nearest_int(_dot(y, bstar[i]) / bstar_squared_norm[i])
             y = [y_i - c * b_i for y_i, b_i in zip(y, B[i])]
+            coefficients[i] = c
 
     # Reconstruct lattice vector from integer coefficients
-    return [sum(c * b_i[j] for c, b_i in zip(coeffs, B) if c) for j in range(dim)]
+    return [sum(c * b_i[j] for c, b_i in zip(coefficients, B) if c) for j in range(dim)]
 
 def small_roots(
     coefficients: Polynomial[int],
@@ -5502,7 +5516,7 @@ def partition(
     if n < 0:
         raise ValueError("n must be a non-negative integer")
 
-    p = euler_transform(restrict) if restrict else _partition_function(mod)
+    p = _euler_transform(restrict) if restrict else _partition_function(mod)
     return p(n) if mod is None or restrict is None else p(n) % mod
 
 @small_cache
@@ -5533,6 +5547,35 @@ def _partition_function(mod: int | None) -> Callable[[int], int]:
         return partitions[n]
 
     return p
+
+@small_cache
+def _euler_transform(a: Callable[[int], int]) -> Callable[[int], int]:
+    """
+    Return the Euler transform of integer sequence a.
+
+    Parameters
+    ----------
+    a : Callable(int) -> int
+        Integer sequence to transform
+    """
+    b_values = [1]
+
+    @lru_cache(maxsize=None)
+    def c(n: int) -> int:
+        return sum(d * a(d) for d in divisors(n))
+
+    def b(n: int) -> int:
+        while len(b_values) <= n:
+            i = len(b_values)
+            total = c(i)
+            for k in range(1, i):
+                total += c(k) * b_values[i - k]
+
+            b_values.append(total // i)
+
+        return b_values[n]
+
+    return b
 
 
 
@@ -5574,9 +5617,147 @@ def alternating(*iterables: Iterable) -> Iterator:
 
 def below(f: Callable[[int], int], upper_bound: int, start: int = 0) -> Iterable[int]:
     """
-    Yield values of f(n) with n counting up from start as long f(n) < upper_bound.
+    Yield consecutive values of n >= start as long f(n) < upper_bound.
     """
     return itertools.takewhile(lambda n: f(n) < upper_bound, itertools.count(start))
+
+def lower_bound(
+    f: Callable[[int], int],
+    f_min: int,
+    low: int = 0,
+    high: int | None = None,
+) -> int:
+    """
+    Given a monotonically increasing function f, find where it first reaches f_min.
+    Returns the smallest integer n in [low, high] such that f(n) >= f_min.
+    """
+    if high is None:
+        span = 1
+        while f(low + span) < f_min: span *= 2
+        high = low + span
+    elif f(high) < f_min:
+        raise ValueError("f(high) is below the f_min")
+
+    return low + bisect.bisect_left(range(low, high + 1), f_min, key=f)
+
+def permutation(n: int, master_key: bytes | None = None) -> Iterator[int]:
+    """
+    Generate a pseudorandom permutation of the integers 0, 1, ..., n - 1.
+    """
+    if n < 1:
+        raise ValueError("n must be a positive integer")
+    if n == 1:
+        yield 0
+        return
+
+    # Derive num_rounds * 32 bytes of round-key material
+    master_key = secrets.token_bytes(32) if master_key is None else master_key
+    keys = tuple(
+        hmac.digest(master_key, b'feistel-round' + i.to_bytes(4, 'big'), hashlib.sha256)
+        for i in range(16)
+    )
+
+    # Pre-compute mask
+    m = (n - 1).bit_length()
+    m += (m & 1)  # round up to even
+    half = m // 2
+    half_bytes = (half + 7) // 8
+    mask = (1 << half) - 1
+
+    def expand_hmac_sha256(key: bytes, msg: bytes, output_length: int) -> bytes:
+        # HMAC-SHA256 in counter mode
+        out, offset, counter = bytearray(output_length), 0, 0
+        while offset < output_length:
+            block = hmac.digest(key, msg + counter.to_bytes(4, 'big'), hashlib.sha256)
+            take = min(len(block), output_length - offset)
+            out[offset:offset+take] = block[:take]
+            offset += take
+            counter += 1
+
+        return bytes(out)
+
+    def feistel(x: int) -> int:
+        l, r = (x >> half) & mask, x & mask
+        for k in keys:
+            msg = r.to_bytes(half_bytes, 'big')
+            f = int.from_bytes(expand_hmac_sha256(k, msg, half_bytes), 'big') & mask
+            l, r = r, (l ^ f) & mask
+
+        return (l << half) | r
+
+    # Cycle-walking to restrict from [0, 2^m) to [0, n)
+    for x in range(n):
+        y = x
+        while True:
+            y = feistel(y)
+            if y < n:
+                yield y
+                break
+
+def is_square(n: int) -> bool:
+    """
+    Check if an integer n is a square.
+    """
+    return n >= 0 and (n & 0xF) in (0, 1, 4, 9) and (sqrt_n := isqrt(n)) * sqrt_n == n
+
+def iroot(x: int, n: int) -> int:
+    """
+    Find the integer n-th root of x.
+    Returns the largest integer a such that a^n ≤ x.
+    Uses Newton's method.
+    """
+    # Handle special cases
+    if n == 2:
+        return isqrt(x)
+    if n == 1:
+        return x
+    if n <= 0:
+        raise ValueError("n must be a positive integer")
+    if x < 0:
+        if n % 2 == 0:
+            raise ValueError("Cannot compute even root of negative number")
+        return -iroot(-x - 1, n) - 1
+    if x == 0:
+        return 0
+
+    # Set initial guess to 2^ceil(log2(x)/n)
+    a = 1 << ((x.bit_length() + n - 1) // n)
+
+    # Run Newton's method on f(a) = a^n - x = 0
+    a, b = a, a + 1
+    while a < b:
+        b = a
+        a = ((n - 1) * a + x // pow(a, n - 1)) // n
+
+    return b
+
+def ilog(a: int, b: int = 2) -> int:
+    """
+    Find the integer logarithm of a with base b.
+    Returns the largest integer n such that b^n ≤ a.
+    Uses repeated squaring and binary search.
+    """
+    if a < 1 or b < 2:
+        raise ValueError("Must have a >= 1 and b >= 2")
+    elif b == 2:
+        return a.bit_length() - 1
+
+    # Find upper bound
+    exp, power = 1, b
+    while power <= a:
+        exp, power = exp * 2, power * power
+
+    # Binary search for exact exponent
+    low, high = 0, exp
+    while low < high:
+        mid = (low + high) // 2
+        power = pow(b, mid)
+        if power <= a:
+            low = mid + 1
+        else:
+            high = mid
+
+    return low - 1
 
 def periodic_continued_fraction(
     D: int,
@@ -5652,89 +5833,6 @@ def convergents(
         B, B_prev = a * B + B_prev, B
         yield A, B
 
-@small_cache
-def euler_transform(a: Callable[[int], int]) -> Callable[[int], int]:
-    """
-    Return the Euler transform of integer sequence a.
-
-    Parameters
-    ----------
-    a : Callable(int) -> int
-        Integer sequence to transform
-    """
-    b_values = [1]
-
-    @lru_cache(maxsize=None)
-    def c(n: int) -> int:
-        return sum(d * a(d) for d in divisors(n))
-
-    def b(n: int) -> int:
-        while len(b_values) <= n:
-            i = len(b_values)
-            total = c(i)
-            for k in range(1, i):
-                total += c(k) * b_values[i - k]
-
-            b_values.append(total // i)
-
-        return b_values[n]
-
-    return b
-
-def permutation(n: int, master_key: bytes | None = None) -> Iterator[int]:
-    """
-    Generate a pseudorandom permutation of the integers 0, 1, ..., n - 1.
-    """
-    if n < 1:
-        raise ValueError("n must be a positive integer")
-    if n == 1:
-        yield 0
-        return
-
-    # Derive num_rounds * 32 bytes of round-key material
-    master_key = secrets.token_bytes(32) if master_key is None else master_key
-    keys = tuple(
-        hmac.digest(master_key, b'feistel-round' + i.to_bytes(4, 'big'), hashlib.sha256)
-        for i in range(16)
-    )
-
-    # Pre-compute mask
-    m = (n - 1).bit_length()
-    m += (m & 1)  # round up to even
-    half = m // 2
-    half_bytes = (half + 7) // 8
-    mask = (1 << half) - 1
-
-    def expand_hmac_sha256(key: bytes, msg: bytes, output_length: int) -> bytes:
-        # HMAC-SHA256 in counter mode
-        out, offset, counter = bytearray(output_length), 0, 0
-        while offset < output_length:
-            block = hmac.digest(key, msg + counter.to_bytes(4, 'big'), hashlib.sha256)
-            take = min(len(block), output_length - offset)
-            out[offset:offset+take] = block[:take]
-            offset += take
-            counter += 1
-
-        return bytes(out)
-
-    def feistel(x: int) -> int:
-        l, r = (x >> half) & mask, x & mask
-        for k in keys:
-            msg = r.to_bytes(half_bytes, 'big')
-            f = int.from_bytes(expand_hmac_sha256(k, msg, half_bytes), 'big') & mask
-            l, r = r, (l ^ f) & mask
-
-        return (l << half) | r
-
-    # Cycle-walking to restrict from [0, 2^m) to [0, n)
-    for x in range(n):
-        y = x
-        while True:
-            y = feistel(y)
-            if y < n:
-                yield y
-                break
-
 def polynomial(
     coefficients: Sequence[Number],
     mod: int | None = None,
@@ -5750,117 +5848,6 @@ def polynomial(
         return lambda x: reduce(lambda b, a: a + b*x, reversed_coefficients, 0)
     else:
         return lambda x: reduce(lambda b, a: (a + b*x) % mod, reversed_coefficients, 0)
-
-def iroot(x: int, n: int) -> int:
-    """
-    Find the integer n-th root of x.
-    Returns the largest integer a such that a^n ≤ x.
-    Uses Newton's method.
-    """
-    # Handle special cases
-    if n == 2:
-        return isqrt(x)
-    if n == 1:
-        return x
-    if n <= 0:
-        raise ValueError("n must be a positive integer")
-    if x < 0:
-        if n % 2 == 0:
-            raise ValueError("Cannot compute even root of negative number")
-        return -iroot(-x - 1, n) - 1
-    if x == 0:
-        return 0
-
-    # Set initial guess to 2^ceil(log2(x)/n)
-    a = 1 << ((x.bit_length() + n - 1) // n)
-
-    # Run Newton's method on f(a) = a^n - x = 0
-    a, b = a, a + 1
-    while a < b:
-        b = a
-        a = ((n - 1) * a + x // pow(a, n - 1)) // n
-
-    return b
-
-def ilog(a: int, b: int = 2) -> int:
-    """
-    Find the integer logarithm of a with base b.
-    Returns the largest integer n such that b^n ≤ a.
-    Uses repeated squaring and binary search.
-    """
-    if a < 1 or b < 2:
-        raise ValueError("Must have a >= 1 and b >= 2")
-    elif b == 2:
-        return a.bit_length() - 1
-
-    # Find upper bound
-    exp, power = 1, b
-    while power <= a:
-        exp, power = exp * 2, power * power
-
-    # Binary search for exact exponent
-    low, high = 0, exp
-    while low < high:
-        mid = (low + high) // 2
-        power = pow(b, mid)
-        if power <= a:
-            low = mid + 1
-        else:
-            high = mid
-
-    return low - 1
-
-def is_square(n: int) -> bool:
-    """
-    Check if an integer n is a square.
-    """
-    return n >= 0 and (n & 0xF) in (0, 1, 4, 9) and (sqrt_n := isqrt(n)) * sqrt_n == n
-
-def perfect_power(n: int) -> tuple[int, int]:
-    """
-    Find integers a, b such that a^b = n.
-
-    Returns the solution (a, b) with minimal b > 1 if there are any such solutions,
-    otherwise returns the trivial solution (n, 1).
-
-    Parameters
-    ----------
-    n : int
-        Integer target
-    """
-    if n in (0, 1):
-        return (n, 2)
-    if n == -1:
-        return (-1, 3)
-
-    n = -n if (is_negative := n < 0) else n
-    if not is_negative and (r := isqrt(n)) * r == n:
-        return (r, 2)
-    for p in primes(low=3, high=n.bit_length()-1):
-        r = iroot(n, p)
-        if pow(r, p) == n:
-            return ((-r if is_negative else r), p)
-
-    return (-n if is_negative else n, 1)
-
-def binary_search(
-    f: Callable[[int], int],
-    threshold: int,
-    low: int = 0,
-    high: int | None = None,
-) -> int:
-    """
-    Given a monotonically increasing function f, find where it crosses a threshold.
-    Returns the smallest integer n in [low, high] such that f(n) >= threshold.
-    """
-    if high is None:
-        span = 1
-        while f(low + span) < threshold: span *= 2
-        high = low + span
-    elif f(high) < threshold:
-        raise ValueError("f(high) is below the threshold")
-
-    return low + bisect.bisect_left(range(low, high + 1), threshold, key=f)
 
 def _identity(n: int) -> int:
     """
