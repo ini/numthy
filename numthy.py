@@ -52,12 +52,10 @@ __all__ = [
     'linear_solve', 'polynomial_solve',
     # Lattices
     'lll_reduce', 'bkz_reduce', 'closest_vector', 'small_roots',
-    # Sequences
-    'fibonacci', 'fibonacci_index', 'polygonal', 'polygonal_index',
     # Appendix
     'integers', 'integer_pairs', 'alternating', 'below', 'lower_bound', 'permutation',
-    'is_square', 'iroot', 'ilog', 'periodic_continued_fraction', 'convergents', 
-    'polynomial',
+    'is_square', 'iroot', 'ilog', 'fibonacci', 'fibonacci_index', 'polygonal',
+    'polygonal_index', 'periodic_continued_fraction', 'convergents',  'polynomial',
 ]
 
 _NoSolutionError = type('_NoSolutionError', (Exception,), {})
@@ -5673,107 +5671,6 @@ def _select_coppersmith_polynomials(
 
 
 ########################################################################
-############################### Sequences ##############################
-########################################################################
-
-def fibonacci(n: int, mod: int | None = None) -> int:
-    """
-    Return the n-th Fibonacci number.
-
-    Parameters
-    ----------
-    n : int
-        Index of the Fibonacci number
-    mod : int
-        Optional modulus
-    """
-    # Handle negative n
-    n, sign = abs(n), (-1 if n < 0 and n % 2 == 0 else 1)
-
-    # Compute Fibonacci number
-    if n <= 70:
-        # For small positive n, use Binet's formula for speed
-        phi = (1 + sqrt(5)) / 2
-        F = round(phi**n / sqrt(5))
-    else:
-        # Fast doubling for larger Fibonacci numbers
-        F, F_next = 1, 1
-        for bit in format(n, 'b')[1:]:
-            F, F_next = F * (2*F_next - F), F*F + F_next*F_next
-            if bit != '0':
-                F, F_next = F_next, F + F_next
-            if mod is not None:
-                F, F_next = F % mod, F_next % mod
-
-    return sign * (F if mod is None else F % mod)
-
-def fibonacci_index(n: int) -> int:
-    """
-    Find the index of n in the Fibonacci sequence.
-    Returns the largest integer i such that F(i) <= n.
-
-    Parameters
-    ----------
-    n : int
-        Upper bound on Fibonacci number
-
-    Complexity
-    ----------
-    O(log² n) time for logarithmic search with Fibonacci evaluations
-    """
-    if n < 0:
-        raise ValueError("Must have n >= 0")
-    if n == 0:
-        return 0
-    if n == 1:
-        return 2
-
-    # Find the maximum exponent representation of n = base^exp
-    base, exp = n, 1
-    while (power := perfect_power(base)) != (base, 1):
-        base = power[0]
-        exp *= power[1]
-
-    # Compute parameters in logspace
-    phi = (1 + sqrt(5)) / 2  # golden ratio
-    log_phi = log(phi)
-    log_sqrt5 = 0.5 * log(5.0)
-    log_target = exp * log(base)  # log(n) = log(base^exp) = exp * log(base)
-
-    # Find Fibonacci index
-    i = max(1, int((log_target + log_sqrt5) / log_phi))
-    while i > 1 and log(fibonacci(i)) > log_target:
-        i -= 1
-    while log(fibonacci(i + 1)) <= log_target:
-        i += 1
-
-    return i
-
-def polygonal(s: int, i: int) -> int:
-    """
-    Return the i-th s-gonal number.
-    """
-    return (s - 2) * i * (i - 1) // 2 + i
-
-def polygonal_index(s: int, n: int) -> int:
-    """
-    Find the index of n in the s-gonal numbers.
-    Returns the largest integer i such that P(s, i) ≤ n.
-    """
-    if n < 0:
-        raise ValueError("n must be a non-negative integer")
-    if n == 0:
-        return 0
-    if s < 2:
-        raise ValueError("s < 2 not supported")
-    if s == 2:
-        return n
-
-    return (isqrt(8 * n * (s - 2) + (s - 4) * (s - 4)) + s - 4) // (2 * (s - 2))
-
-
-
-########################################################################
 ############################### Appendix ###############################
 ########################################################################
 
@@ -5952,6 +5849,101 @@ def ilog(a: int, b: int = 2) -> int:
             high = mid
 
     return low - 1
+
+def fibonacci(n: int, mod: int | None = None) -> int:
+    """
+    Return the n-th Fibonacci number.
+
+    Parameters
+    ----------
+    n : int
+        Index of the Fibonacci number
+    mod : int
+        Optional modulus
+    """
+    # Handle negative n
+    n, sign = abs(n), (-1 if n < 0 and n % 2 == 0 else 1)
+
+    # Compute Fibonacci number
+    if n <= 70:
+        # For small positive n, use Binet's formula for speed
+        phi = (1 + sqrt(5)) / 2
+        F = round(phi**n / sqrt(5))
+    else:
+        # Fast doubling for larger Fibonacci numbers
+        F, F_next = 1, 1
+        for bit in format(n, 'b')[1:]:
+            F, F_next = F * (2*F_next - F), F*F + F_next*F_next
+            if bit != '0':
+                F, F_next = F_next, F + F_next
+            if mod is not None:
+                F, F_next = F % mod, F_next % mod
+
+    return sign * (F if mod is None else F % mod)
+
+def fibonacci_index(n: int) -> int:
+    """
+    Find the index of n in the Fibonacci sequence.
+    Returns the largest integer i such that F(i) <= n.
+
+    Parameters
+    ----------
+    n : int
+        Upper bound on Fibonacci number
+
+    Complexity
+    ----------
+    O(log² n) time for logarithmic search with Fibonacci evaluations
+    """
+    if n < 0:
+        raise ValueError("Must have n >= 0")
+    if n == 0:
+        return 0
+    if n == 1:
+        return 2
+
+    # Find the maximum exponent representation of n = base^exp
+    base, exp = n, 1
+    while (power := perfect_power(base)) != (base, 1):
+        base = power[0]
+        exp *= power[1]
+
+    # Compute parameters in logspace
+    phi = (1 + sqrt(5)) / 2  # golden ratio
+    log_phi = log(phi)
+    log_sqrt5 = 0.5 * log(5.0)
+    log_target = exp * log(base)  # log(n) = log(base^exp) = exp * log(base)
+
+    # Find Fibonacci index
+    i = max(1, int((log_target + log_sqrt5) / log_phi))
+    while i > 1 and log(fibonacci(i)) > log_target:
+        i -= 1
+    while log(fibonacci(i + 1)) <= log_target:
+        i += 1
+
+    return i
+
+def polygonal(s: int, i: int) -> int:
+    """
+    Return the i-th s-gonal number.
+    """
+    return (s - 2) * i * (i - 1) // 2 + i
+
+def polygonal_index(s: int, n: int) -> int:
+    """
+    Find the index of n in the s-gonal numbers.
+    Returns the largest integer i such that P(s, i) ≤ n.
+    """
+    if n < 0:
+        raise ValueError("n must be a non-negative integer")
+    if n == 0:
+        return 0
+    if s < 2:
+        raise ValueError("s < 2 not supported")
+    if s == 2:
+        return n
+
+    return (isqrt(8 * n * (s - 2) + (s - 4) * (s - 4)) + s - 4) // (2 * (s - 2))
 
 def periodic_continued_fraction(
     D: int,
