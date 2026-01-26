@@ -2145,9 +2145,9 @@ def valuation(n: int, p: int) -> int:
 
     # Greedily divide out largest powers first
     v = 0
-    for powers, exponent in reversed(powers):
-        while n % powers == 0:
-            n //= powers
+    for power, exponent in reversed(powers):
+        while n % power == 0:
+            n //= power
             v += exponent
 
     return v
@@ -4394,7 +4394,7 @@ def linear_solve(
     if b is not None and len(b) != num_rows:
         raise ValueError("Dimension mismatch")
 
-    # Each row's GCD must divide the corresponding b entry
+    # The GCD of each row in A must divide the corresponding b entry
     b = [0] * num_rows if b is None else b
     for row, b_i in zip(A, b):
         g = gcd(*row)
