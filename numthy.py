@@ -29,7 +29,7 @@ from typing import Callable, Collection, Iterator, TypeAlias, TypeVar
 ########################### Table of Contents ##########################
 ########################################################################
 
-__version__ = '0.0.0'
+__version__ = '0.1.0b'
 
 __all__ = [
     'Number', 'Vector', 'Matrix', 'Monomial', 'Polynomial', 'clear_cache',

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "numthy"
-version = "0.0.0"
+version = "0.1.0b"
 description = "Computational number theory. Pure Python. Zero dependencies. Unreasonably fast."
 readme = "README.md"
 requires-python = ">= 3.10"
@@ -22,18 +22,11 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Mathematics",
 ]
 keywords = ["number-theory", "mathematics", "primes", "factorization", "cryptography"]
-
-[project.optional-dependencies]
-mcp = ["mcp>=1.0.0"]
-cli = ["anthropic>=0.18.0"]
-all = ["mcp>=1.0.0", "anthropic>=0.18.0"]
-
-[project.scripts]
-numthy = "cli:main"
-numthy-mcp = "mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/ini/numthy"
@@ -41,4 +34,4 @@ Documentation = "https://github.com/ini/numthy/blob/main/API.md"
 Repository = "https://github.com/ini/numthy"
 
 [tool.setuptools]
-py-modules = ["numthy", "cli", "mcp_server", "generate_api"]
+py-modules = ["numthy"]

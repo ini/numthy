@@ -44,6 +44,7 @@ noxfile.py
 
 .ipynb_checkpoints/
 
+bridge/
 working/
 .DS_Store
 .AppleDouble
