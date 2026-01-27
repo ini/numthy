@@ -37,6 +37,10 @@ next(solutions)  # (376, -174)
 next(solutions)  # (17304, 25218)
 ```
 
+## Demo
+
+Try NumThy in the browser: [ini.github.io/numthy/demo](https://ini.github.io/numthy/demo)
+
 ## Documentation
 
 See [API.md](API.md) for the full reference.
