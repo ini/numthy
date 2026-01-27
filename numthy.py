@@ -49,7 +49,7 @@ __all__ = [
     # Diophantine Equations
     'bezout', 'cornacchia', 'pell', 'conic', 'pythagorean_triples', 'pillai',
     # Algebraic Systems
-    'linear_solve', 'polynomial_solve',
+    'solve_linear_system', 'solve_polynomial_system',
     # Lattices
     'lll_reduce', 'bkz_reduce', 'closest_vector', 'small_roots',
     # Appendix
@@ -300,7 +300,7 @@ def sum_primes(
     ----------
     x : int
         Upper bound for prime numbers
-    f : Callable(int) -> int
+    f : Callable(int) -> Number
         Completely multiplicative function f(n),
         where f(1) = 1 and f(ab) = f(a) * f(b) for all a, b > 0
     f_prefix_sum : Callable(int) -> Number
@@ -2030,7 +2030,7 @@ def partition(
         If provided, return p(n) mod m
     restrict : Callable(int) -> bool
         Function indicating integers that can be used in the partition,
-        where restrict(k) = True means integer k can be used
+        where restrict(k) = True means integer k can be used (e.g. restrict=nt.is_prime)
     """
     if n < 0:
         raise ValueError("n must be a non-negative integer")
@@ -2767,7 +2767,7 @@ def hensel(
         Prime base of modulus
     k : int
         Exponent of modulus
-    initial : list[int]
+    initial : Iterable[int]
         Initial solutions to f(x) ≡ 0 (mod p)
 
     Complexity
@@ -2896,6 +2896,7 @@ def nth_roots(a: int, n: int, mod: int) -> tuple[int, ...]:
 def discrete_log(a: int, b: int, mod: int) -> int | None:
     """
     Find the smallest non-negative integer x such that a ≡ b^x (mod m).
+    Returns None if no such integer exists.
 
     Uses the Pohlig-Hellman algorithm, with either baby-step giant-step or
     Pollard's rho for discrete logarithms on the prime-order sub-problems.
@@ -4359,7 +4360,7 @@ def _pillai_bound(a: int, b: int, c: int) -> int:
 ########################## Algebraic Systems  ##########################
 ########################################################################
 
-def linear_solve(
+def solve_linear_system(
     A: Matrix[int],
     b: Vector[int] | None = None,
     *,
@@ -4474,7 +4475,7 @@ def linear_solve(
 
     return (x, nullspace_basis if nullspace else None)
 
-def polynomial_solve(
+def solve_polynomial_system(
     polynomials: list[Polynomial[int]],
     bounds: tuple[int, ...],
 ) -> tuple[tuple[int, ...], ...]:
@@ -5096,7 +5097,7 @@ def closest_vector(B: Matrix[int], target: Vector[int]) -> Vector[int]:
     return [sum(c * b_i[j] for c, b_i in zip(coefficients, B) if c) for j in range(dim)]
 
 def small_roots(
-    coefficients: Polynomial[int],
+    polynomial: Polynomial[int],
     mod: int,
     bounds: tuple[int, ...] | None = None,
     *,
@@ -5113,7 +5114,7 @@ def small_roots(
 
     Parameters
     ----------
-    coefficients : dict[tuple[int, ...], int]
+    polynomial : dict[tuple[int, ...], int]
         Multivariate polynomial with integer coefficients as {monomial: coefficient}
         where each monomial is a tuple indicating the exponents for each variable
         (e.g. {(1, 0): 5, (0, 1): 3, (0, 0): -7} represents 5x + 3y - 7)
@@ -5135,7 +5136,7 @@ def small_roots(
     if (M := abs(mod)) == 0:
         raise ZeroDivisionError("Modulus must be nonzero")
 
-    f = {m: r - M if r > M // 2 else r for m, c in coefficients.items() if (r := c % M)}
+    f = {m: r - M if r > M // 2 else r for m, c in polynomial.items() if (r := c % M)}
     num_variables = _poly_num_variables(f)
 
     # Input validation
@@ -5168,7 +5169,7 @@ def small_roots(
     # Try solving with increasing numbers of Howgrave-Graham polynomials
     selected = _select_coppersmith_polynomials(hg_relations, weights, basis_index)
     for k in range(min(2, num_variables), len(selected) + 1):
-        solutions = polynomial_solve(selected[:k], bounds)
+        solutions = solve_polynomial_system(selected[:k], bounds)
         solutions = {x for x in solutions if _poly_eval(f, x) % M == 0}
         if solutions:
             return sorted(solutions)
@@ -5176,7 +5177,7 @@ def small_roots(
     # Fallback to check roots of individual non-Howgrave-Graham polynomials
     roots = set()
     for g in other_relations:
-        solutions = polynomial_solve([g], bounds)
+        solutions = solve_polynomial_system([g], bounds)
         roots.update(x for x in solutions if _poly_eval(f, x) % M == 0)
 
     return sorted(roots)
