@@ -1066,10 +1066,11 @@ def _gen_prime_factors(n: int) -> Iterator[int]:
                 continue
 
             # ECM to peel off medium-sized factors
-            d = _ecm(n, max_curves=(32 if num_bits > 100 else None))
-            if 1 < d < n:
-                stack.extend([d, n // d])
-                continue
+            if num_bits > 128:
+                d = _ecm(n, max_curves=32)
+                if 1 < d < n:
+                    stack.extend([d, n // d])
+                    continue
 
             # Fallback to SIQS for remaining large factors
             B, max_polynomial_count = None, None
@@ -2894,7 +2895,7 @@ def nth_roots(a: int, n: int, mod: int) -> tuple[int, ...]:
 
 def discrete_log(a: int, b: int, mod: int) -> int | None:
     """
-    Find the smallest non-negative integer x such that b^x ≡ a (mod m).
+    Find the smallest non-negative integer x such that a ≡ b^x (mod m).
 
     Uses the Pohlig-Hellman algorithm, with either baby-step giant-step or
     Pollard's rho for discrete logarithms on the prime-order sub-problems.
@@ -2937,7 +2938,7 @@ def discrete_log(a: int, b: int, mod: int) -> int | None:
     if a == 1:
         return offset
 
-    # Solve b^x ≡ a (mod p^e) for each prime power
+    # Solve a ≡ b^x (mod p^e) for each prime power
     congruences = []
     for p, e in prime_factorization(mod).items():
         try:
@@ -3344,7 +3345,7 @@ def _adleman_manders_miller(delta: int, r: int, p: int) -> int:
 
 def _discrete_log_mod_prime_power(a: int, b: int, p: int, e: int) -> tuple[int, int]:
     """
-    Solve b^x ≡ a (mod q) in the unit group (Z/qZ)×, where q = p^e.
+    Solve a ≡ b^x (mod q) in the unit group (Z/qZ)×, where q = p^e.
     Returns both the discrete log x and ord_q(b).
     """
     q = p**e

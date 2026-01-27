@@ -10,42 +10,50 @@ Computational number theory. Pure Python. Zero dependencies. Unreasonably fast.
 pip install numthy
 ```
 
-Or save [`numthy.py`](https://raw.githubusercontent.com/ini/numthy/main/numthy.py) directly into your project.
+Or just drop [`numthy.py`](https://raw.githubusercontent.com/ini/numthy/main/numthy.py) into your project.
 
 ## Quick Start
 
 ```python
 import numthy as nt
 
-# Primality testing
-nt.is_prime(2**89 - 1)  # True (Mersenne prime)
+# Primality
+nt.is_prime(2**89 - 1)  # True
 
-# Factorization
-nt.prime_factors(2**64 + 1)  # (274177, 67280421310721)
+# Factorization (SIQS handles 50+ digits)
+nt.prime_factors(2**128 + 1)  # (59649589127497217, 5704689200685129054721)
 
-# Modular arithmetic
-nt.discrete_log(3, 1000, 2**16 + 1)  # 50921
+# Prime counting
+nt.count_primes(10**9)  # 50847534
+
+# Discrete log
+nt.discrete_log(1000, 3, 65537)  # 50921 (i.e., 3^50921 ≡ 1000 mod 65537)
 
 # Diophantine equations
-solutions = nt.pell(2)
-next(solutions)  # (3, 2) since 3² - 2·2² = 1
+# Solve 2x² + 3xy - 3y² + 7x - 10y - 24 = 0
+solutions = nt.conic(2, 3, -3, 7, -10, -24)
+next(solutions)  # (8, 10)
+next(solutions)  # (376, -174)
+next(solutions)  # (17304, 25218)
 ```
-
-## Highlights
-
-The same algorithms used by Mathematica, SageMath, and research-grade CAS systems — implemented from scratch in pure Python.
-
-- **Primality** — Miller-Rabin, Baillie-PSW, Lucas-Lehmer
-- **Factorization** — Brent's variant of Pollard's rho, Lenstra's ECM (Elliptic Curve Method), Self-Initializing Quadratic Sieve with up to 3 large primes
-- **Prime counting** — Lagarias-Miller-Odlyzko combinatorial method
-- **Discrete log** — Pohlig-Hellman, Baby-step giant-step, Pollard rho
-- **Modular roots** — Tonelli-Shanks, Adleman-Manders-Miller for arbitary k-th roots, Hensel lifting with both simple and multiple roots
-- **Diophantine** — Cornacchia, Pell solver, binary quadratic forms, Pillai's equation
-- **Lattices** — LLL reduction, Babai's nearest plane, Smith normal form
 
 ## Documentation
 
-See [API.md](API.md) for the full API reference.
+See [API.md](API.md) for the full reference.
+
+## Under The Hood
+
+One file, with everything implemented from scratch. Simple API, with heavy-duty algorithms under the hood:
+
+* Extra-strong variant of the Baillie-PSW primality test
+* Lagarias-Miller-Odlyzko (LMO) algorithm for prime counting, generalized to sums over primes of any arbitrary completely multiplicative function
+* Two-stage Lenstra's ECM factorization with Montgomery curves and Suyama parametrization
+* Self-initializing quadratic sieve (SIQS) with triple-large-prime variation
+* Cantor-Zassenhaus → Hensel lifting → Chinese Remainder Theorem pipeline for finding modular roots of polynomials
+* Adleman-Manders-Miller algorithm for general n-th roots over finite fields
+* General solver for all binary quadratic Diophantine equations (ax² + bxy + cy² + dx + ey + f = 0)
+* Lenstra–Lenstra–Lovász lattice basis reduction algorithm with automatic precision escalation
+* Jochemsz-May generalization of Coppersmith's method for multivariate polynomials with any number of variables
 
 ## Requirements
 
@@ -55,4 +63,4 @@ That's it.
 
 ## License
 
-[Free to use, copy, modify, and redistribute with attribution.](LICENSE.md)
+[MIT](LICENSE.md)
