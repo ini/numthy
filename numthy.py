@@ -2156,6 +2156,7 @@ def valuation(n: int, p: int) -> int:
 def multiplicative_range(f: Callable[..., int], N: int, f0: int = 1) -> list[int]:
     """
     Find the value of a multiplicative function f(n) for each n = 0, 1, 2, ..., N - 1.
+    Uses a sieving approach across the range to calculate function values efficiently.
 
     Parameters
     ----------
@@ -3056,7 +3057,9 @@ def _cantor_zassenhaus_edf(f: list[int], target_degree: int, p: int) -> list[lis
             if len(f) > 1:
                 factors.append(f)
             return factors
-        raise ValueError("equal-degree factorization over F_2 for d > 1 not implemented")
+
+        raise ValueError(
+            "Equal-degree factorization over F_2 for d > 1 not supported")
 
     while True:
         # Try gcd with random polynomial directly
@@ -5918,9 +5921,9 @@ def fibonacci_index(n: int) -> int:
 
     # Find Fibonacci index
     i = max(1, int((log_target + log_sqrt5) / log_phi))
-    while i > 1 and log(fibonacci(i)) > log_target:
+    while i > 1 and fibonacci(i) > n:
         i -= 1
-    while log(fibonacci(i + 1)) <= log_target:
+    while fibonacci(i + 1) <= n:
         i += 1
 
     return i

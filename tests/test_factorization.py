@@ -587,6 +587,34 @@ class TestInternalHelpersAndPipeline(unittest.TestCase):
         self.assertIn(factor, (101, 103))
         self.assertEqual(n % factor, 0)
 
+    def test_ecm_finds_small_factor_in_gt128bit_composite(self):
+        """ECM should find small prime factors in >128-bit composites."""
+        self.assertTrue(hasattr(UT, "_ecm"), "expected internal _ecm")
+
+        # Construct >128-bit composite with a small prime factor.
+        # Small factor should be found by ECM relatively quickly.
+        small_prime = 1009  # small enough for ECM to find
+        large_prime = (1 << 127) - 1  # M127, a 127-bit Mersenne prime
+        n = small_prime * large_prime
+        self.assertGreater(n.bit_length(), 128)
+
+        # ECM should find the small factor
+        factor = UT._ecm(n, max_curves=100)
+        self.assertEqual(factor, small_prime)
+        self.assertEqual(n % factor, 0)
+
+    def test_ecm_returns_1_for_prime_gt128bit(self):
+        """ECM should return 1 (failure) when given a prime."""
+        self.assertTrue(hasattr(UT, "_ecm"), "expected internal _ecm")
+
+        # M127 is a 127-bit Mersenne prime
+        prime = (1 << 127) - 1
+        self.assertGreater(prime.bit_length(), 64)
+
+        # ECM cannot factor a prime, should return 1
+        factor = UT._ecm(prime, max_curves=10)
+        self.assertEqual(factor, 1)
+
     def test_siqs_finds_nontrivial_factor(self):
         self.assertTrue(hasattr(UT, "_siqs"), "expected internal _siqs")
 
@@ -629,20 +657,19 @@ class TestInternalHelpersAndPipeline(unittest.TestCase):
 
     def test_pipeline_gt64bit_ecm_used_when_brent_fails(self):
         """
-        For >64-bit composites, after a (more aggressively capped) Brent attempt,
+        For >128-bit composites, after a (more aggressively capped) Brent attempt,
         the pipeline tries ECM. We mock _brent to fail and _ecm to return a factor.
         """
         self.assertTrue(hasattr(UT, "_brent"))
         self.assertTrue(hasattr(UT, "_ecm"))
         self.assertTrue(hasattr(UT, "_siqs"))
 
-        # Construct a 65-bit semiprime with known prime factors.
-        d = 228_479  # prime; also divides 2^71-1, but we use it directly.
-        q = 140_737_488_355_333  # prime (48-bit)
+        # Construct a >128-bit semiprime with known prime factors.
+        d = 228_479  # prime
+        q = (1 << 127) - 1  # Mersenne prime M127 (127-bit prime)
         self.assertTrue(ref_is_prime_64(d))
-        self.assertTrue(ref_is_prime_64(q))
         n = d * q
-        self.assertGreater(n.bit_length(), 64)
+        self.assertGreater(n.bit_length(), 128)
 
         with mock.patch.object(UT, "_brent", return_value=1) as m_brent, \
              mock.patch.object(UT, "_ecm", return_value=d) as m_ecm, \
@@ -651,18 +678,19 @@ class TestInternalHelpersAndPipeline(unittest.TestCase):
             got = UT.prime_factors(n)
 
         self.assertEqual(got, (d, q))
-        assert_pf_valid(self, n, got)
+        # Skip assert_pf_valid since ref_is_prime_64 can't verify 127-bit primes
+        self.assertEqual(prod_int(got), n)
         self.assertGreaterEqual(m_brent.call_count, 1)
         self.assertGreaterEqual(m_ecm.call_count, 1)
 
     def test_pipeline_gt64bit_siqs_fallback_and_B_growth(self):
         """
-        If Brent and ECM fail, the pipeline falls back to SIQS and increases B
-        until SIQS yields a non-trivial factor. We mock SIQS to fail once and
-        then succeed, and assert B grows according to the implementation.
+        If Brent fails for a 64-128 bit composite, the pipeline falls back to SIQS
+        and increases B until SIQS yields a non-trivial factor. We mock SIQS to
+        fail once and then succeed, and assert B grows according to the implementation.
+        Note: ECM is only tried for >128-bit inputs, so it's not called here.
         """
         self.assertTrue(hasattr(UT, "_brent"))
-        self.assertTrue(hasattr(UT, "_ecm"))
         self.assertTrue(hasattr(UT, "_siqs"))
 
         p = 2_147_483_647  # prime (M31)
@@ -671,6 +699,7 @@ class TestInternalHelpersAndPipeline(unittest.TestCase):
         self.assertTrue(ref_is_prime_64(q))
         n = p * q
         self.assertGreater(n.bit_length(), 64)
+        self.assertLessEqual(n.bit_length(), 128)  # ECM not tried for this range
 
         # First SIQS call fails; second succeeds with p.
         def siqs_side_effect(
@@ -685,14 +714,12 @@ class TestInternalHelpersAndPipeline(unittest.TestCase):
             return p
 
         with mock.patch.object(UT, "_brent", return_value=1) as m_brent, \
-             mock.patch.object(UT, "_ecm", return_value=1) as m_ecm, \
              mock.patch.object(UT, "_siqs", side_effect=siqs_side_effect) as m_siqs:
             got = UT.prime_factors(n)
 
         self.assertEqual(got, tuple(sorted((p, q))))
         assert_pf_valid(self, n, got)
         self.assertGreaterEqual(m_brent.call_count, 1)
-        self.assertGreaterEqual(m_ecm.call_count, 1)
 
         # Validate SIQS was called at least twice and parameters grew
         self.assertGreaterEqual(m_siqs.call_count, 2)

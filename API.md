@@ -395,6 +395,7 @@ multiplicative_range(f: Callable[..., int], N: int, f0: int=1) -> list[int]
 [[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2156)
 
 > Find the value of a multiplicative function f(n) for each n = 0, 1, 2, ..., N - 1.
+Uses a sieving approach across the range to calculate function values efficiently.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -413,7 +414,7 @@ multiplicative_range(f: Callable[..., int], N: int, f0: int=1) -> list[int]
 ```python
 egcd(a: int, b: int) -> tuple[int, int, int]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2293)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2294)
 
 > Extended Euclidean algorithm.
 
@@ -439,7 +440,7 @@ egcd(a: int, b: int) -> tuple[int, int, int]
 ```python
 crt(congruences: Iterable[tuple[int, int]]) -> int | None
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2331)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2332)
 
 > Solve a system of linear congruences x ≡ aᵢ (mod nᵢ)
 via the Chinese Remainder Theorem.
@@ -460,7 +461,7 @@ Supports non-coprime moduli.
 ```python
 coprimes(n: int) -> Iterator[int]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2351)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2352)
 
 > Generate all integers k in the range [0, n) that are coprime to n.
 
@@ -484,7 +485,7 @@ O(n log n) time and O(1) space for n > 10⁷ (gcd approach).`
 ```python
 multiplicative_order(a: int, mod: int) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2378)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2379)
 
 > Compute ordₘ(a), the smallest positive integer such that a^k ≡ 1 (mod m).
 
@@ -500,7 +501,7 @@ multiplicative_order(a: int, mod: int) -> int
 ```python
 primitive_root(n: int) -> int | None
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2405)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2406)
 
 > Find a primitive root modulo n.
 
@@ -517,7 +518,7 @@ Use Bach's primitive root finding algorithm to search for candidates.
 ```python
 legendre(a: int, p: int) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2444)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2445)
 
 > Compute the Legendre symbol (a | p), where p is an odd prime.
 
@@ -533,7 +534,7 @@ legendre(a: int, p: int) -> int
 ```python
 jacobi(a: int, n: int) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2464)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2465)
 
 > Compute the Jacobi symbol (a | n), where n is an odd positive integer.
 
@@ -551,7 +552,7 @@ jacobi(a: int, n: int) -> int
 ```python
 kronecker(a: int, n: int) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2498)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2499)
 
 > Compute the Kronecker symbol (a | n).
 
@@ -567,7 +568,7 @@ kronecker(a: int, n: int) -> int
 ```python
 dirichlet_character(m: int, k: int) -> Callable[[int], Number]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2532)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2533)
 
 > Return the Dirichlet character χₘ‚ₖ : ℤ → ℂ under Conrey labeling,
 where m is the modulus and k is an index such that gcd(m, k) = 1.
@@ -596,7 +597,7 @@ See: https://www.lmfdb.org/knowledge/show/character.dirichlet.conrey
 ```python
 hensel(coefficients: Sequence[int], p: int, k: int, initial: Iterable[int] | None=None) -> tuple[int, ...]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2750)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2751)
 
 > Find all solutions to the polynomial congruence f(x) ≡ 0 (mod pᵏ).
 
@@ -620,7 +621,7 @@ O(pd) to find initial solutions if not provided.`
 ```python
 polynomial_roots(coefficients: Sequence[int], mod: int) -> tuple[int, ...]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2818)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2819)
 
 > Find all roots x of a univariate polynomial f(x) ≡ 0 (mod m).
 
@@ -639,7 +640,7 @@ Cantor-Zassenhaus + Hensel lifting, then combines solutions with CRT.
 ```python
 nth_roots(a: int, n: int, mod: int) -> tuple[int, ...]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2857)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2858)
 
 > Find all solutions x to x^n ≡ a (mod m).
 
@@ -660,7 +661,7 @@ to combine solutions.
 ```python
 discrete_log(a: int, b: int, mod: int) -> int | None
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2896)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L2897)
 
 > Find the smallest non-negative integer x such that a ≡ b^x (mod m).
 Returns None if no such integer exists.
@@ -685,7 +686,7 @@ Pollard's rho for discrete logarithms on the prime-order sub-problems.
 ```python
 bezout(a: int, b: int, c: int) -> Iterator[tuple[int, int]]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L3594)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L3597)
 
 > Generate all integer solutions to the linear Diophantine equation ax + by = c.
 
@@ -714,7 +715,7 @@ and then generate an infinite family of solutions.
 ```python
 cornacchia(d: int, m: int) -> Iterator[tuple[int, int]]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L3643)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L3646)
 
 > Generate all unique positive integer solutions to the equation x² + dy² = m
 where 0 < d < m and gcd(d, m) = 1.
@@ -741,7 +742,7 @@ factorization, divisor count, and cost of modular roots respectively.`
 ```python
 pell(D: int, N: int=1) -> Iterator[tuple[int, int]]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L3718)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L3721)
 
 > Generate all unique positive integer solutions to the generalized Pell equation
 x² - Dy² = N, where D is not a perfect square.
@@ -775,7 +776,7 @@ and cost of modular roots respectively.`
 ```python
 conic(a: int, b: int, c: int, d: int, e: int, f: int) -> Iterator[tuple[int, int]]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L3825)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L3828)
 
 > Generate all unique integer solutions (x, y) to the binary quadratic Diophantine
 conic equation ax² + bxy + cy² + dx + ey + f = 0.
@@ -810,7 +811,7 @@ Uses the theory of binary quadratic forms, classifying by discriminant Δ = b² 
 ```python
 pythagorean_triples(max_c: float | None=None, max_sum: float | None=None) -> Iterator[tuple[int, int, int]]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L3884)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L3887)
 
 > Generate positive integer solutions to the equation a² + b² = c².
 
@@ -832,7 +833,7 @@ When bounds are specified, no order is guaranteed.
 ```python
 pillai(a: int, b: int, c: int) -> Iterator[tuple[int, int]]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L3945)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L3948)
 
 > Generate all positive integer solutions (x, y) to the exponential Diophantine
 Pillai equation aˣ - bʸ = c, where a, b >= 2 and x, y > 0.
@@ -861,7 +862,7 @@ Pillai equation aˣ - bʸ = c, where a, b >= 2 and x, y > 0.
 ```python
 solve_linear_system(A: Matrix[int], b: Vector[int] | None=None, *, nullspace: bool=False) -> tuple[Vector[int] | None, list[Vector[int]] | None]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L4363)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L4366)
 
 > Find integer solutions to the system of linear equations given by Ax = b.
 
@@ -885,7 +886,7 @@ solve_linear_system(A: Matrix[int], b: Vector[int] | None=None, *, nullspace: bo
 ```python
 solve_polynomial_system(polynomials: list[Polynomial[int]], bounds: tuple[int, ...]) -> tuple[tuple[int, ...], ...]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L4478)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L4481)
 
 > Find integer solutions to a system of multivariate polynomial equations
 f₁(x₁, x₂, ...) = f₂(x₁, x₂, ...) = ... = fₖ(x₁, x₂, ...) = 0,
@@ -912,7 +913,7 @@ Not guaranteed to find *all* solutions for large bounds.
 ```python
 lll_reduce(B: Matrix[int]) -> Matrix[int]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L4979)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L4982)
 
 > Lenstra-Lenstra-Lovász (LLL) lattice basis reduction.
 
@@ -939,7 +940,7 @@ See: https://www.cs.cmu.edu/~avrim/451f11/lectures/lect1129_LLL.pdf
 ```python
 bkz_reduce(B: Matrix[int], block_size: int=20) -> Matrix[int]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5010)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5013)
 
 > BKZ (Block Korkine-Zolotarev) lattice basis reduction.
 
@@ -964,7 +965,7 @@ See: https://www.sciencedirect.com/science/article/pii/0304397587900648
 ```python
 closest_vector(B: Matrix[int], target: Vector[int]) -> Vector[int]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5058)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5061)
 
 > Find the (approximate) closest vector to the target in the lattice
 with basis given by rows of matrix B.
@@ -985,7 +986,7 @@ Uses Babai nearest-plane algorithm for approximate closest vector.
 ```python
 small_roots(polynomial: Polynomial[int], mod: int, bounds: tuple[int, ...] | None=None, *, epsilon: float=0.05) -> list[tuple[int, ...]]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5099)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5102)
 
 > Find small integer roots of a multivariate polynomial f(x₁, x₂, ...) ≡ 0 (mod M).
 
@@ -1017,7 +1018,7 @@ about O(H⁵W log³A) time and O(H² + HW) space, where A is the max lattice`
 ```python
 integers() -> Iterator[int]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5679)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5682)
 
 > Generate all integers (0, 1, -1, 2, -2, ...) in an infinite generator.
 
@@ -1028,7 +1029,7 @@ integers() -> Iterator[int]
 ```python
 integer_pairs() -> Iterator[tuple[int, int]]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5688)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5691)
 
 > Generate all integer pairs (x, y) via diagonal enumeration.
 
@@ -1039,7 +1040,7 @@ integer_pairs() -> Iterator[tuple[int, int]]
 ```python
 alternating(*iterables: Iterable) -> Iterator
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5700)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5703)
 
 > Visit input iterables in a cycle until each is exhausted.
 
@@ -1050,7 +1051,7 @@ alternating(*iterables: Iterable) -> Iterator
 ```python
 below(f: Callable[[int], int], upper_bound: int, start: int=0) -> Iterable[int]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5711)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5714)
 
 > Yield consecutive values of n >= start as long f(n) < upper_bound.
 
@@ -1061,7 +1062,7 @@ below(f: Callable[[int], int], upper_bound: int, start: int=0) -> Iterable[int]
 ```python
 lower_bound(f: Callable[[int], int], f_min: int, low: int=0, high: int | None=None) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5717)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5720)
 
 > Given a monotonically increasing function f, find where it first reaches f_min.
 Returns the smallest integer n in [low, high] such that f(n) >= f_min.
@@ -1073,7 +1074,7 @@ Returns the smallest integer n in [low, high] such that f(n) >= f_min.
 ```python
 permutation(n: int, master_key: bytes | None=None) -> Iterator[int]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5736)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5739)
 
 > Generate a pseudorandom permutation of the integers 0, 1, ..., n - 1.
 
@@ -1084,7 +1085,7 @@ permutation(n: int, master_key: bytes | None=None) -> Iterator[int]
 ```python
 is_square(n: int) -> bool
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5790)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5793)
 
 > Check if an integer n is a square.
 
@@ -1095,7 +1096,7 @@ is_square(n: int) -> bool
 ```python
 iroot(x: int, n: int) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5796)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5799)
 
 > Find the integer n-th root of x.
 Returns the largest integer a such that a^n ≤ x.
@@ -1108,7 +1109,7 @@ Uses Newton's method.
 ```python
 ilog(a: int, b: int=2) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5827)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5830)
 
 > Find the integer logarithm of a with base b.
 Returns the largest integer n such that b^n ≤ a.
@@ -1121,7 +1122,7 @@ Uses repeated squaring and binary search.
 ```python
 fibonacci(n: int, mod: int | None=None) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5855)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5858)
 
 > Return the n-th Fibonacci number.
 
@@ -1137,7 +1138,7 @@ fibonacci(n: int, mod: int | None=None) -> int
 ```python
 fibonacci_index(n: int) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5886)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5889)
 
 > Find the index of n in the Fibonacci sequence.
 Returns the largest integer i such that F(i) <= n.
@@ -1155,7 +1156,7 @@ Returns the largest integer i such that F(i) <= n.
 ```python
 polygonal(s: int, i: int) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5928)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5931)
 
 > Return the i-th s-gonal number.
 
@@ -1166,7 +1167,7 @@ polygonal(s: int, i: int) -> int
 ```python
 polygonal_index(s: int, n: int) -> int
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5934)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5937)
 
 > Find the index of n in the s-gonal numbers.
 Returns the largest integer i such that P(s, i) ≤ n.
@@ -1178,7 +1179,7 @@ Returns the largest integer i such that P(s, i) ≤ n.
 ```python
 periodic_continued_fraction(D: int, P: int=0, Q: int=1) -> tuple[Iterator[int], int, int]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5950)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5953)
 
 > Compute coefficients for the periodic continued fraction
 (P + sqrt(D)) / Q = a₀ + 1 / (a₁ + 1 / (a₂ + ...)).
@@ -1198,7 +1199,7 @@ periodic_continued_fraction(D: int, P: int=0, Q: int=1) -> tuple[Iterator[int], 
 ```python
 convergents(coefficients: Iterable[int], num: int | None=None) -> Iterator[tuple[int, int]]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5996)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L5999)
 
 > Return convergents of the continued fraction with the given coefficients.
 
@@ -1221,7 +1222,7 @@ convergents(coefficients: Iterable[int], num: int | None=None) -> Iterator[tuple
 ```python
 polynomial(coefficients: Sequence[Number], mod: int | None=None) -> Callable[[Number], Number]
 ```
-[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L6024)
+[[source]](https://github.com/ini/numthy/blob/main/numthy.py#L6027)
 
 > Create a univariate polynomial function with the given coefficients (a₀, ..., aₙ).
 Uses Horner's method for polynomial evaluation.

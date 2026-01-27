@@ -70,7 +70,7 @@ def _load_under_test():
 
 UT = _load_under_test()
 
-_REQUIRED = ("linear_solve", "polynomial_solve")
+_REQUIRED = ("solve_linear_system", "solve_polynomial_system")
 _missing = [name for name in _REQUIRED if not hasattr(UT, name)]
 if _missing:
     raise ImportError(f"Module under test is missing expected API: {_missing}")
@@ -165,34 +165,34 @@ def assert_solutions_valid(
 
 class TestLinearSolveValidation(unittest.TestCase):
     def test_empty_matrix_b_none(self):
-        x, basis = UT.linear_solve([], None)
+        x, basis = UT.solve_linear_system([], None)
         self.assertEqual(x, [])
         self.assertIsNone(basis)
 
     def test_empty_matrix_b_nonzero(self):
-        x, basis = UT.linear_solve([], [1])
+        x, basis = UT.solve_linear_system([], [1])
         self.assertIsNone(x)
         self.assertIsNone(basis)
 
     def test_ragged_matrix_raises(self):
         with self.assertRaises(ValueError):
-            UT.linear_solve([[1, 2], [3]], [1, 2])
+            UT.solve_linear_system([[1, 2], [3]], [1, 2])
 
     def test_dimension_mismatch_raises(self):
         with self.assertRaises(ValueError):
-            UT.linear_solve([[1, 2], [3, 4]], [1])
+            UT.solve_linear_system([[1, 2], [3, 4]], [1])
 
     def test_row_gcd_infeasible(self):
         A = [[2, 4], [6, 8]]
         b = [3, 2]
-        x, basis = UT.linear_solve(A, b)
+        x, basis = UT.solve_linear_system(A, b)
         self.assertIsNone(x)
         self.assertIsNone(basis)
 
     def test_row_gcd_infeasible_with_nullspace(self):
         A = [[2, 4], [6, 8]]
         b = [3, 2]
-        x, basis = UT.linear_solve(A, b, nullspace=True)
+        x, basis = UT.solve_linear_system(A, b, nullspace=True)
         self.assertIsNone(x)
         self.assertEqual(basis, [])
 
@@ -201,21 +201,21 @@ class TestLinearSolveSolutions(unittest.TestCase):
     def test_square_unique_solution(self):
         A = [[2, 3], [1, 2]]
         b = [5, 3]
-        x, basis = UT.linear_solve(A, b)
+        x, basis = UT.solve_linear_system(A, b)
         self.assertEqual(x, [1, 1])
         self.assertIsNone(basis)
 
     def test_square_no_integer_solution_due_gcd(self):
         A = [[2, 0], [0, 2]]
         b = [1, 1]
-        x, basis = UT.linear_solve(A, b)
+        x, basis = UT.solve_linear_system(A, b)
         self.assertIsNone(x)
         self.assertIsNone(basis)
 
     def test_overdetermined_consistent(self):
         A = [[1, 0], [0, 1], [1, 1]]
         b = [2, 3, 5]
-        x, basis = UT.linear_solve(A, b)
+        x, basis = UT.solve_linear_system(A, b)
         self.assertIsNotNone(x)
         self.assertIsNone(basis)
         self.assertTrue(is_solution(A, x, b))
@@ -223,27 +223,27 @@ class TestLinearSolveSolutions(unittest.TestCase):
     def test_overdetermined_inconsistent(self):
         A = [[1, 0], [0, 1], [1, 1]]
         b = [2, 3, 6]  # inconsistent with x=2,y=3
-        x, basis = UT.linear_solve(A, b)
+        x, basis = UT.solve_linear_system(A, b)
         self.assertIsNone(x)
         self.assertIsNone(basis)
 
     def test_inconsistent_system_with_row_gcd_ok(self):
         A = [[1, 1], [2, 2]]
         b = [1, 0]  # second equation contradicts first
-        x, basis = UT.linear_solve(A, b)
+        x, basis = UT.solve_linear_system(A, b)
         self.assertIsNone(x)
         self.assertIsNone(basis)
 
     def test_underdetermined_has_solution(self):
         A = [[1, 1, 1]]
         b = [0]
-        x, basis = UT.linear_solve(A, b)
+        x, basis = UT.solve_linear_system(A, b)
         self.assertIsNotNone(x)
         self.assertTrue(is_solution(A, x, b))
 
     def test_b_none_defaults_to_zero(self):
         A = [[2, 0], [0, 3]]
-        x, basis = UT.linear_solve(A, None)
+        x, basis = UT.solve_linear_system(A, None)
         self.assertEqual(x, [0, 0])
         self.assertIsNone(basis)
 
@@ -252,7 +252,7 @@ class TestLinearSolveNullspace(unittest.TestCase):
     def test_nullspace_basis_homogeneous(self):
         A = [[1, 2, 3], [2, 4, 6]]
         b = [0, 0]
-        x, basis = UT.linear_solve(A, b, nullspace=True)
+        x, basis = UT.solve_linear_system(A, b, nullspace=True)
         self.assertIsNotNone(x)
         self.assertTrue(is_solution(A, x, b))
         self.assertIsInstance(basis, list)
@@ -265,7 +265,7 @@ class TestLinearSolveNullspace(unittest.TestCase):
     def test_nullspace_basis_inhomogeneous(self):
         A = [[1, 1, 1]]
         b = [1]
-        x, basis = UT.linear_solve(A, b, nullspace=True)
+        x, basis = UT.solve_linear_system(A, b, nullspace=True)
         self.assertIsNotNone(x)
         self.assertTrue(is_solution(A, x, b))
         self.assertIsInstance(basis, list)
@@ -282,7 +282,7 @@ class TestLinearSolveNullspace(unittest.TestCase):
     def test_nullspace_dimension_matches_rank(self):
         A = [[3, 6, 9, 12], [1, 2, 3, 4]]
         b = [0, 0]
-        x, basis = UT.linear_solve(A, b, nullspace=True)
+        x, basis = UT.solve_linear_system(A, b, nullspace=True)
         self.assertIsNotNone(x)
         self.assertTrue(is_solution(A, x, b))
         rank = rank_fraction(A)
@@ -291,7 +291,7 @@ class TestLinearSolveNullspace(unittest.TestCase):
     def test_zero_matrix_nullspace(self):
         A = [[0, 0, 0], [0, 0, 0]]
         b = [0, 0]
-        x, basis = UT.linear_solve(A, b, nullspace=True)
+        x, basis = UT.solve_linear_system(A, b, nullspace=True)
         self.assertEqual(x, [0, 0, 0])
         self.assertIsInstance(basis, list)
         self.assertEqual(len(basis), 3)
@@ -307,7 +307,7 @@ class TestLinearSolveRandomized(unittest.TestCase):
             A = [[rng.randint(-3, 3) for _ in range(n)] for __ in range(m)]
             x0 = [rng.randint(-3, 3) for _ in range(n)]
             b = mat_vec(A, x0)
-            x, basis = UT.linear_solve(A, b)
+            x, basis = UT.solve_linear_system(A, b)
             self.assertIsNotNone(x)
             self.assertTrue(is_solution(A, x, b))
             if any(b):
@@ -323,19 +323,19 @@ class TestPolynomialSolveBasic(unittest.TestCase):
     def test_empty_polynomials_returns_all_points(self):
         bounds = (2, 2)
         expected = sorted(itertools.product(range(-1, 2), repeat=2))
-        got = UT.polynomial_solve([], bounds)
+        got = UT.solve_polynomial_system([], bounds)
         self.assertEqual(got, tuple(expected))
 
     def test_zero_polynomial_is_ignored(self):
         bounds = (2, 2)
         expected = sorted(itertools.product(range(-1, 2), repeat=2))
-        got = UT.polynomial_solve([{}], bounds)
+        got = UT.solve_polynomial_system([{}], bounds)
         self.assertEqual(got, tuple(expected))
 
     def test_constant_nonzero_no_solution(self):
         bounds = (3, 3)
         polynomials = [{(0, 0): 1}]
-        got = UT.polynomial_solve(polynomials, bounds)
+        got = UT.solve_polynomial_system(polynomials, bounds)
         self.assertEqual(got, ())
 
     def test_linear_unique_solution(self):
@@ -345,7 +345,7 @@ class TestPolynomialSolveBasic(unittest.TestCase):
             {(1, 0): 1, (0, 1): -1, (0, 0): -2},
         ]
         bounds = (5, 5)
-        got = UT.polynomial_solve(polynomials, bounds)
+        got = UT.solve_polynomial_system(polynomials, bounds)
         self.assertEqual(got, ((1, -1),))
 
     def test_multiple_solutions_circle(self):
@@ -358,13 +358,13 @@ class TestPolynomialSolveBasic(unittest.TestCase):
                 (2, 1), (2, -1), (-2, 1), (-2, -1),
             }
         )
-        got = UT.polynomial_solve(polynomials, bounds)
+        got = UT.solve_polynomial_system(polynomials, bounds)
         self.assertEqual(got, tuple(expected))
 
     def test_univariate_no_solution(self):
         polynomials = [{(2,): 1, (0,): 1}]  # x^2 + 1 = 0
         bounds = (5,)
-        got = UT.polynomial_solve(polynomials, bounds)
+        got = UT.solve_polynomial_system(polynomials, bounds)
         self.assertEqual(got, ())
 
     def test_conflicting_univariate_system(self):
@@ -373,7 +373,7 @@ class TestPolynomialSolveBasic(unittest.TestCase):
             {(1,): 1, (0,): -1},      # x - 1 = 0
         ]
         bounds = (5,)
-        got = UT.polynomial_solve(polynomials, bounds)
+        got = UT.solve_polynomial_system(polynomials, bounds)
         self.assertEqual(got, ())
 
 
@@ -386,7 +386,7 @@ class TestPolynomialSolveAdvanced(unittest.TestCase):
             {(0, 1): 1, (1, 0): -1},
         ]
         bounds = (501, 501)
-        got = UT.polynomial_solve(polynomials, bounds)
+        got = UT.solve_polynomial_system(polynomials, bounds)
         self.assertEqual(got, ((-1, -1), (1, 1)))
 
     def test_grobner_path_no_univariate_in_input(self):
@@ -396,14 +396,14 @@ class TestPolynomialSolveAdvanced(unittest.TestCase):
             {(1, 0): 1, (0, 1): -1},  # x - y
         ]
         bounds = (501, 501)
-        got = UT.polynomial_solve(polynomials, bounds)
+        got = UT.solve_polynomial_system(polynomials, bounds)
         self.assertEqual(got, ((0, 0),))
 
     def test_backtrack_without_univariate(self):
         # x*y = 0 yields solutions with x=0 or y=0 (no univariate polynomial).
         polynomials = [{(1, 1): 1}]
         bounds = (4, 4)
-        got = UT.polynomial_solve(polynomials, bounds)
+        got = UT.solve_polynomial_system(polynomials, bounds)
         expected = brute_force_poly_system(polynomials, bounds)
         self.assertEqual(got, tuple(expected))
 
@@ -414,7 +414,7 @@ class TestPolynomialSolveAdvanced(unittest.TestCase):
             {(0, 1): 1, (0, 0): -1},  # y - 1
         ]
         bounds = (10, 2)
-        got = UT.polynomial_solve(polynomials, bounds)
+        got = UT.solve_polynomial_system(polynomials, bounds)
         self.assertEqual(got, ((7, 1),))
 
     def test_three_variable_system(self):
@@ -425,7 +425,7 @@ class TestPolynomialSolveAdvanced(unittest.TestCase):
             {(1, 0, 0): 1, (0, 1, 0): 1, (0, 0, 1): 1, (0, 0, 0): -3},
         ]
         bounds = (3, 3, 3)
-        got = UT.polynomial_solve(polynomials, bounds)
+        got = UT.solve_polynomial_system(polynomials, bounds)
         self.assertEqual(got, ((1, 1, 1),))
 
     def test_large_bound_hensel_root_path(self):
@@ -435,13 +435,13 @@ class TestPolynomialSolveAdvanced(unittest.TestCase):
             {(0, 1): 1, (1, 0): -1},   # y - x = 0
         ]
         bounds = (40001, 40001)
-        got = UT.polynomial_solve(polynomials, bounds)
+        got = UT.solve_polynomial_system(polynomials, bounds)
         self.assertEqual(got, ((-1, -1), (1, 1)))
 
 
 class TestPolynomialSolveEdgeCases(unittest.TestCase):
     def test_empty_bounds(self):
-        got = UT.polynomial_solve([], ())
+        got = UT.solve_polynomial_system([], ())
         self.assertEqual(got, ((),))
 
 
@@ -465,7 +465,7 @@ class TestPolynomialSolveRandomized(unittest.TestCase):
                     poly[exponents] = poly.get(exponents, 0) + coeff
                 polynomials.append(poly)
             expected = brute_force_poly_system(polynomials, bounds)
-            got = UT.polynomial_solve(polynomials, bounds)
+            got = UT.solve_polynomial_system(polynomials, bounds)
             self.assertEqual(got, tuple(expected))
             assert_solutions_valid(self, polynomials, bounds, got)
 

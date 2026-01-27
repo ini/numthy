@@ -85,6 +85,10 @@ _REQUIRED = (
     "is_square",
     "below",
     "lower_bound",
+    "fibonacci",
+    "fibonacci_index",
+    "polygonal",
+    "polygonal_index",
 )
 _missing = [name for name in _REQUIRED if not hasattr(UT, name)]
 if _missing:
@@ -683,6 +687,235 @@ class TestBelow(unittest.TestCase):
         self.assertEqual(call_count[0], 1)
         list(gen)
         self.assertEqual(call_count[0], 6)
+
+
+class TestFibonacci(unittest.TestCase):
+    # Known Fibonacci values for reference
+    FIB_SEQUENCE = [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610]
+
+    def test_small_values(self):
+        for i, expected in enumerate(self.FIB_SEQUENCE):
+            with self.subTest(n=i):
+                self.assertEqual(UT.fibonacci(i), expected)
+
+    def test_zero(self):
+        self.assertEqual(UT.fibonacci(0), 0)
+
+    def test_one(self):
+        self.assertEqual(UT.fibonacci(1), 1)
+
+    def test_negative_indices(self):
+        # F(-n) = (-1)^(n+1) * F(n)
+        # F(-1) = 1, F(-2) = -1, F(-3) = 2, F(-4) = -3, F(-5) = 5, ...
+        expected = [1, -1, 2, -3, 5, -8, 13, -21, 34, -55]
+        for i, exp in enumerate(expected, start=1):
+            with self.subTest(n=-i):
+                self.assertEqual(UT.fibonacci(-i), exp)
+
+    def test_large_values(self):
+        # F(100) is a known value
+        F100 = 354224848179261915075
+        self.assertEqual(UT.fibonacci(100), F100)
+
+    def test_very_large_value(self):
+        # F(1000) has 209 digits
+        F1000 = UT.fibonacci(1000)
+        self.assertEqual(len(str(F1000)), 209)
+        # Check it ends with known digits
+        self.assertTrue(str(F1000).endswith("8875"))
+
+    def test_modular_arithmetic(self):
+        mod = 1000000007
+        # F(100) mod 10^9+7
+        self.assertEqual(UT.fibonacci(100, mod), 354224848179261915075 % mod)
+
+    def test_modular_large(self):
+        mod = 10**9 + 7
+        # Just verify it returns something in range
+        result = UT.fibonacci(10000, mod)
+        self.assertGreaterEqual(result, 0)
+        self.assertLess(result, mod)
+
+    def test_recurrence_relation(self):
+        # F(n) = F(n-1) + F(n-2)
+        for n in range(2, 50):
+            with self.subTest(n=n):
+                self.assertEqual(
+                    UT.fibonacci(n),
+                    UT.fibonacci(n - 1) + UT.fibonacci(n - 2)
+                )
+
+    def test_binet_to_fast_doubling_boundary(self):
+        # Test around n=70 where implementation switches
+        for n in range(68, 75):
+            with self.subTest(n=n):
+                F_n = UT.fibonacci(n)
+                F_prev = UT.fibonacci(n - 1)
+                F_next = UT.fibonacci(n + 1)
+                self.assertEqual(F_n + F_prev, F_next)
+
+
+class TestFibonacciIndex(unittest.TestCase):
+    def test_zero(self):
+        self.assertEqual(UT.fibonacci_index(0), 0)
+
+    def test_one(self):
+        # F(1) = F(2) = 1, so fibonacci_index(1) should return 2
+        self.assertEqual(UT.fibonacci_index(1), 2)
+
+    def test_negative_raises(self):
+        with self.assertRaises(ValueError):
+            UT.fibonacci_index(-1)
+
+    def test_exact_fibonacci_numbers(self):
+        # For exact Fibonacci numbers, should return their index
+        fib_values = [(0, 0), (1, 2), (2, 3), (3, 4), (5, 5), (8, 6),
+                      (13, 7), (21, 8), (34, 9), (55, 10), (89, 11)]
+        for n, expected_idx in fib_values:
+            with self.subTest(n=n):
+                self.assertEqual(UT.fibonacci_index(n), expected_idx)
+
+    def test_between_fibonacci_numbers(self):
+        # fibonacci_index(n) returns largest i where F(i) <= n
+        # F(6) = 8, F(7) = 13, so fibonacci_index(10) = 6
+        self.assertEqual(UT.fibonacci_index(10), 6)
+        # F(9) = 34, F(10) = 55, so fibonacci_index(50) = 9
+        self.assertEqual(UT.fibonacci_index(50), 9)
+
+    def test_consistency_with_fibonacci(self):
+        # For any n, F(fibonacci_index(n)) <= n < F(fibonacci_index(n) + 1)
+        test_values = [2, 4, 6, 7, 10, 15, 20, 50, 100, 500, 1000]
+        for n in test_values:
+            with self.subTest(n=n):
+                idx = UT.fibonacci_index(n)
+                self.assertLessEqual(UT.fibonacci(idx), n)
+                self.assertGreater(UT.fibonacci(idx + 1), n)
+
+    def test_large_value(self):
+        # F(100) = 354224848179261915075
+        F100 = 354224848179261915075
+        self.assertEqual(UT.fibonacci_index(F100), 100)
+        self.assertEqual(UT.fibonacci_index(F100 - 1), 99)
+        self.assertEqual(UT.fibonacci_index(F100 + 1), 100)
+
+
+class TestPolygonal(unittest.TestCase):
+    def test_triangular_numbers(self):
+        # P(3, i) = i*(i+1)/2 = 1, 3, 6, 10, 15, 21, ...
+        triangular = [1, 3, 6, 10, 15, 21, 28, 36, 45, 55]
+        for i, expected in enumerate(triangular, start=1):
+            with self.subTest(s=3, i=i):
+                self.assertEqual(UT.polygonal(3, i), expected)
+
+    def test_square_numbers(self):
+        # P(4, i) = i^2 = 1, 4, 9, 16, 25, ...
+        for i in range(1, 15):
+            with self.subTest(s=4, i=i):
+                self.assertEqual(UT.polygonal(4, i), i * i)
+
+    def test_pentagonal_numbers(self):
+        # P(5, i) = i*(3i-1)/2 = 1, 5, 12, 22, 35, 51, ...
+        pentagonal = [1, 5, 12, 22, 35, 51, 70, 92, 117, 145]
+        for i, expected in enumerate(pentagonal, start=1):
+            with self.subTest(s=5, i=i):
+                self.assertEqual(UT.polygonal(5, i), expected)
+
+    def test_hexagonal_numbers(self):
+        # P(6, i) = i*(2i-1) = 1, 6, 15, 28, 45, 66, ...
+        hexagonal = [1, 6, 15, 28, 45, 66, 91, 120, 153, 190]
+        for i, expected in enumerate(hexagonal, start=1):
+            with self.subTest(s=6, i=i):
+                self.assertEqual(UT.polygonal(6, i), expected)
+
+    def test_zeroth_index(self):
+        # P(s, 0) should be 0 for all s
+        for s in range(3, 10):
+            with self.subTest(s=s):
+                self.assertEqual(UT.polygonal(s, 0), 0)
+
+    def test_first_index(self):
+        # P(s, 1) = 1 for all s
+        for s in range(3, 10):
+            with self.subTest(s=s):
+                self.assertEqual(UT.polygonal(s, 1), 1)
+
+    def test_formula_consistency(self):
+        # P(s, i) = (s-2)*i*(i-1)/2 + i
+        for s in range(3, 12):
+            for i in range(0, 20):
+                with self.subTest(s=s, i=i):
+                    expected = (s - 2) * i * (i - 1) // 2 + i
+                    self.assertEqual(UT.polygonal(s, i), expected)
+
+
+class TestPolygonalIndex(unittest.TestCase):
+    def test_negative_raises(self):
+        with self.assertRaises(ValueError):
+            UT.polygonal_index(3, -1)
+
+    def test_invalid_s_raises(self):
+        with self.assertRaises(ValueError):
+            UT.polygonal_index(1, 10)
+
+    def test_zero(self):
+        for s in range(3, 10):
+            with self.subTest(s=s):
+                self.assertEqual(UT.polygonal_index(s, 0), 0)
+
+    def test_s_equals_2(self):
+        # P(2, i) = i, so polygonal_index(2, n) = n
+        for n in range(0, 20):
+            with self.subTest(n=n):
+                self.assertEqual(UT.polygonal_index(2, n), n)
+
+    def test_triangular_exact(self):
+        # Triangular numbers: 1, 3, 6, 10, 15, 21, ...
+        triangular = [1, 3, 6, 10, 15, 21, 28, 36, 45, 55]
+        for i, t in enumerate(triangular, start=1):
+            with self.subTest(n=t):
+                self.assertEqual(UT.polygonal_index(3, t), i)
+
+    def test_triangular_between(self):
+        # Between triangular numbers
+        # T(3) = 6, T(4) = 10, so polygonal_index(3, 7) = 3
+        self.assertEqual(UT.polygonal_index(3, 7), 3)
+        self.assertEqual(UT.polygonal_index(3, 8), 3)
+        self.assertEqual(UT.polygonal_index(3, 9), 3)
+
+    def test_square_exact(self):
+        for i in range(1, 15):
+            with self.subTest(i=i):
+                self.assertEqual(UT.polygonal_index(4, i * i), i)
+
+    def test_square_between(self):
+        # Between 9 and 16, index is 3
+        for n in range(9, 16):
+            with self.subTest(n=n):
+                self.assertEqual(UT.polygonal_index(4, n), 3)
+
+    def test_pentagonal_exact(self):
+        pentagonal = [1, 5, 12, 22, 35, 51, 70, 92]
+        for i, p in enumerate(pentagonal, start=1):
+            with self.subTest(n=p):
+                self.assertEqual(UT.polygonal_index(5, p), i)
+
+    def test_consistency_with_polygonal(self):
+        # For any n, P(s, polygonal_index(s, n)) <= n < P(s, polygonal_index(s, n) + 1)
+        for s in range(3, 8):
+            for n in [1, 5, 10, 20, 50, 100, 500]:
+                with self.subTest(s=s, n=n):
+                    idx = UT.polygonal_index(s, n)
+                    self.assertLessEqual(UT.polygonal(s, idx), n)
+                    self.assertGreater(UT.polygonal(s, idx + 1), n)
+
+    def test_large_values(self):
+        # Test with larger values
+        n = 10**12
+        for s in range(3, 8):
+            with self.subTest(s=s, n=n):
+                idx = UT.polygonal_index(s, n)
+                self.assertLessEqual(UT.polygonal(s, idx), n)
+                self.assertGreater(UT.polygonal(s, idx + 1), n)
 
 
 # ------------------------------- Entry point -------------------------------
