@@ -181,17 +181,25 @@ def random_prime(num_bits: int, *, safe: bool = False) -> int:
     if not safe and num_bits == 2:
         return secrets.randbelow(2) + 2
 
-    # Generate candidates
+    # Precompute bitmask
+    k = num_bits - 3 if safe else num_bits - 2  # number of random bits per candidate
+    batch_size = max(1, int(0.4 * k))
+    top_bit, mask = 1 << (k + 1), (1 << k) - 1
+
+    # Generate batches of random bits and test primality
     while True:
-        k = num_bits - 1 if safe else num_bits
-        middle = secrets.randbits(k - 2)  # all random bits except first/last
-        p = (1 << (k - 1)) | (middle << 1) | 1  # force first/last bit to 1
-        if is_prime(p):
-            if safe:
-                if is_prime(q := 2*p + 1):
-                    return q
-            else:
-                return p
+        batch = secrets.randbits(batch_size * k)
+        for _ in range(batch_size):
+            middle = batch & mask  # all random bits except first/last
+            p = top_bit | (middle << 1) | 1  # force first/last bit to 1
+            if is_prime(p):
+                if safe:
+                    if is_prime(q := 2*p + 1):
+                        return q
+                else:
+                    return p
+
+            batch >>= k
 
 def primes(
     *,
