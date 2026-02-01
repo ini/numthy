@@ -14,7 +14,7 @@ import itertools
 import secrets
 import sys
 
-from collections import Counter, defaultdict, deque
+from collections import defaultdict, deque
 from collections.abc import Iterable, Sequence
 from fractions import Fraction
 from functools import cache, lru_cache, partial, reduce
@@ -29,7 +29,7 @@ from typing import Callable, Collection, Iterator, TypeAlias, TypeVar
 ########################### Table of Contents ##########################
 ########################################################################
 
-__version__ = '0.1.0b'
+__version__ = '0.1.0'
 
 __all__ = [
     'Number', 'Vector', 'Matrix', 'Monomial', 'Polynomial', 'clear_cache',

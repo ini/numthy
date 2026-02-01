@@ -4,7 +4,7 @@
 
 *Computational number theory. Pure Python. Zero dependencies. Unreasonably fast.*
 
-`v0.1.0b`
+`v0.1.0`
 
 </div>
 
