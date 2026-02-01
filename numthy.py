@@ -4173,9 +4173,13 @@ def _degenerate_conic(*coefficients: int) -> Iterator[tuple[int, int]]:
     # where s^2 = Δ, 4ad = 2a(g+h), 4ae = (b+s)g + (b-s)h, and 4af = gh,
     # which implies g, h are roots of quadratic t^2 - 2dt + 4af
     discriminant = b*b - 4*a*c
-    if discriminant < 0:
-        # Degenerate ellipse (single point)
-        yield from _ellipse(*coefficients)
+    if not is_square(discriminant):
+        # Conjugate (non-rational) lines, where only solution is singular point
+        denominator = 4*a*c - b*b  # = -discriminant, nonzero here
+        x = (b*e - 2*c*d) // denominator
+        y = (b*d - 2*a*e) // denominator
+        if a*x*x + b*x*y + c*y*y + d*x + e*y + f == 0:
+            yield (x, y)
     elif discriminant == 0:
         # Degenerate parabola (two parallel lines)
         if is_square(d*d - 4*a*f):
@@ -5890,7 +5894,7 @@ def fibonacci(n: int, mod: int | None = None) -> int:
             if mod is not None:
                 F, F_next = F % mod, F_next % mod
 
-    return sign * (F if mod is None else F % mod)
+    return sign * F if mod is None else (sign * F) % mod
 
 def fibonacci_index(n: int) -> int:
     """
