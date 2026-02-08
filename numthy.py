@@ -568,7 +568,7 @@ def _lmo_p2(
     Compute P2(x, a) from the LMO algorithm.
 
     This is the prefix sum Σ f(n) over all n ≤ x with exactly 2 prime factors,
-    both greater than p_a.
+    both greater than the a-th prime.
     """
     sqrt_x = isqrt(x)
     sieve_limit = x // y
@@ -1948,7 +1948,7 @@ def omega(n: int) -> int:
 
     Parameters
     ----------
-    n: int
+    n : int
         Positive integer function argument
     """
     if n < 1:
@@ -1961,7 +1961,7 @@ def big_omega(n: int) -> int:
 
     Parameters
     ----------
-    n: int
+    n : int
         Positive integer function argument
     """
     if n < 1:
@@ -1974,7 +1974,7 @@ def divisor_count(n: int) -> int:
 
     Parameters
     ----------
-    n: int
+    n : int
         Positive integer function argument
     """
     if n < 1:
@@ -1987,7 +1987,7 @@ def divisor_sum(n: int) -> int:
 
     Parameters
     ----------
-    n: int
+    n : int
         Positive integer function argument
     """
     if n < 1:
@@ -2000,9 +2000,9 @@ def divisor_function(n: int, k: int = 1) -> int:
 
     Parameters
     ----------
-    n: int
+    n : int
         Positive integer function argument
-    k: int
+    k : int
         Divisor exponent
     """
     if n < 1:
@@ -2046,7 +2046,7 @@ def radical(n: int) -> int:
 
     Parameters
     ----------
-    n: int
+    n : int
         Positive integer function argument
     """
     if n < 1:
@@ -2059,7 +2059,7 @@ def mobius(n: int) -> int:
 
     Parameters
     ----------
-    n: int
+    n : int
         Positive integer function argument
     """
     if n < 1:
@@ -2087,7 +2087,7 @@ def totient(n: int) -> int:
 
     Parameters
     ----------
-    n: int
+    n : int
         Positive integer function argument
     """
     if n < 1:
@@ -2105,7 +2105,7 @@ def carmichael(n: int) -> int:
 
     Parameters
     ----------
-    n: int
+    n : int
         Positive integer function argument
     """
     if n < 1:
@@ -2775,7 +2775,7 @@ def hensel(
 
     Complexity
     ----------
-    O(ksd) time, where s is total number of solutions and d = deg(f).
+    O(ksd) arithmetic operations, where s is total number of solutions and d = deg(f).
     O(pd) to find initial solutions if not provided.
     """
     if not is_prime(p):
@@ -2957,7 +2957,7 @@ def discrete_log(target: int, base: int, mod: int) -> int | None:
 
 def _polynomial_roots_mod_prime(coefficients: Sequence[int], p: int) -> tuple[int, ...]:
     """
-    Find all roots of a univariate polynomial f(x) over F_p.
+    Find all roots of a univariate polynomial f(x) over a finite field Fₚ.
 
     Uses the Cantor-Zassenhaus algorithm to factor the polynomial, extracting
     roots from linear factors. Computes gcd(f, x^p - x) first to isolate the
@@ -2999,7 +2999,7 @@ def _polynomial_roots_mod_prime(coefficients: Sequence[int], p: int) -> tuple[in
 
 def _cantor_zassenhaus_ddf(f: list[int], p: int) -> list[tuple[list[int], int]]:
     """
-    Distinct-degree factorization of polynomial f over F_p.
+    Distinct-degree factorization of polynomial f over a finite field Fₚ.
 
     Returns list of (factor, degree) where factor is the product of all
     irreducible factors of that degree.
@@ -3032,7 +3032,7 @@ def _cantor_zassenhaus_ddf(f: list[int], p: int) -> list[tuple[list[int], int]]:
 
 def _cantor_zassenhaus_edf(f: list[int], target_degree: int, p: int) -> list[list[int]]:
     """
-    Equal-degree factorization of polynomial f over F_p using Cantor-Zassenhaus.
+    Equal-degree factorization of polynomial f over Fₚ using Cantor-Zassenhaus.
 
     Given f that is a product of irreducible polynomials all of target_degree,
     returns the list of irreducible factors.
@@ -3060,8 +3060,7 @@ def _cantor_zassenhaus_edf(f: list[int], target_degree: int, p: int) -> list[lis
                 factors.append(f)
             return factors
 
-        raise ValueError(
-            "Equal-degree factorization over F_2 for d > 1 not supported")
+        raise ValueError("Equal-degree factorization over F_2 for d > 1 not supported")
 
     while True:
         # Try gcd with random polynomial directly
@@ -3083,7 +3082,7 @@ def _cantor_zassenhaus_edf(f: list[int], target_degree: int, p: int) -> list[lis
 
 def _upoly_fp_sub(f: list[int], g: list[int], p: int) -> list[int]:
     """
-    Subtract univariate polynomials over F_p. Returns f - g.
+    Subtract univariate polynomials over Fₚ. Returns f - g.
     """
     difference = [(a - b) % p for a, b in itertools.zip_longest(f, g, fillvalue=0)]
     while difference and difference[-1] == 0: difference.pop()
@@ -3091,7 +3090,7 @@ def _upoly_fp_sub(f: list[int], g: list[int], p: int) -> list[int]:
 
 def _upoly_fp_mul(f: list[int], g: list[int], p: int) -> list[int]:
     """
-    Multiply univariate polynomials over F_p. Returns f * g.
+    Multiply univariate polynomials over Fₚ. Returns f * g.
     """
     if not f or not g:
         return []
@@ -3107,7 +3106,7 @@ def _upoly_fp_mul(f: list[int], g: list[int], p: int) -> list[int]:
 
 def _upoly_fp_divmod(f: list[int], g: list[int], p: int) -> tuple[list[int], list[int]]:
     """
-    Univariate polynomial division with remainder over F_p. Returns (f / g, f % g).
+    Univariate polynomial division with remainder over Fₚ. Returns (f / g, f % g).
     """
     if not g:
         raise ZeroDivisionError("polynomial division by zero")
@@ -3134,7 +3133,7 @@ def _upoly_fp_divmod(f: list[int], g: list[int], p: int) -> tuple[list[int], lis
 
 def _upoly_fp_monic(f: list[int], p: int) -> list[int]:
     """
-    Make univariate polynomial monic over F_p.
+    Make univariate polynomial monic over Fₚ.
     """
     if not f:
         return []
@@ -3143,7 +3142,7 @@ def _upoly_fp_monic(f: list[int], p: int) -> list[int]:
 
 def _upoly_fp_gcd(f: list[int], g: list[int], p: int) -> list[int]:
     """
-    Univariate polynomial GCD over F_p, returned as monic.
+    Univariate polynomial GCD over Fₚ, returned as monic.
     """
     while g:
         f, g = g, _upoly_fp_divmod(f, g, p)[1]
@@ -3151,7 +3150,7 @@ def _upoly_fp_gcd(f: list[int], g: list[int], p: int) -> list[int]:
 
 def _upoly_fp_powmod(base: list[int], exponent: int, g: list[int], p: int) -> list[int]:
     """
-    Univariate polynomial exponentiation mod g over F_p via binary exponentiation.
+    Univariate polynomial exponentiation mod g over Fₚ via binary exponentiation.
     """
     result = [1]
     base = _upoly_fp_divmod(base, g, p)[1]
@@ -3165,7 +3164,7 @@ def _upoly_fp_powmod(base: list[int], exponent: int, g: list[int], p: int) -> li
 
 def _upoly_fp_random(max_degree: int, p: int) -> list[int]:
     """
-    Generate a random non-zero univariate polynomial over F_p.
+    Generate a random non-zero univariate polynomial over Fₚ.
     """
     while True:
         coefficients = [secrets.randbelow(p) for _ in range(max_degree + 1)]
@@ -4566,7 +4565,7 @@ def _bareiss(A: Matrix[int], b: Vector[int]) -> list[int] | None:
 
 def _linear_solve_mod_p(A: Matrix[int], b: Vector[int], p: int) -> list[int] | None:
     """
-    Solve Ax ≡ b (mod p) using Gaussian elimination over Z/pZ.
+    Solve Ax ≡ b (mod p) using Gaussian elimination over the finite field Fₚ.
     Returns solution vector x with 0 ≤ xᵢ < p, or None if no solution exists.
 
     Complexity
@@ -4866,23 +4865,17 @@ def _find_integer_roots_bounded_univariate(
     f = polynomial(coefficients)
     if len(coefficients) <= 1:
         return set()  # constant polynomial
-    if bound <= 35000:
-        return {x for x in range(-bound + 1, bound) if f(x) == 0}  # brute force
 
-    # Find roots modulo primes
-    p, gcd_coefficients = 65521, gcd(*coefficients)
-    for _ in range(32):
-        p = next_prime(p)
-        if gcd_coefficients % p == 0:
-            continue
+    # Heuristically choose exponent k ~ 1/(log B / d)^(1/3))
+    g = gcd(*coefficients)
+    coefficients = [c // g for c in coefficients] if g > 1 else coefficients
+    degree = len(coefficients) - 1
+    k = max(1, iroot(bound.bit_length() // degree, 3))
 
-        # Find roots mod p^k for some k such that p^k > 2B covers interval (-B, B)
-        mod = p**(k := ilog(2*bound, p) + 1)
-        mod_roots = (r if r < mod // 2 else r - mod for r in hensel(coefficients, p, k))
-        if (roots := set(r for r in mod_roots if abs(r) < bound and f(r) == 0)):
-            return roots
-
-    return set()
+    # Find roots mod p^k, where p^k > 2B covers interval (-B, B)
+    mod = (p := next_prime(iroot(2 * bound, k) + 1)) ** k
+    roots = (r if r < mod // 2 else r - mod for r in hensel(coefficients, p, k))
+    return {r for r in roots if abs(r) < bound and f(r) == 0}
 
 def _brute_force_polynomial_system(
     polynomials: list[Polynomial[int]],

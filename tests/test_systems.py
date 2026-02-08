@@ -322,21 +322,22 @@ class TestLinearSolveRandomized(unittest.TestCase):
 class TestPolynomialSolveBasic(unittest.TestCase):
     def test_empty_polynomials_returns_all_points(self):
         bounds = (2, 2)
-        expected = sorted(itertools.product(range(-1, 2), repeat=2))
         got = UT.solve_polynomial_system([], bounds)
+        expected = brute_force_poly_system([], bounds)
         self.assertEqual(got, tuple(expected))
 
     def test_zero_polynomial_is_ignored(self):
         bounds = (2, 2)
-        expected = sorted(itertools.product(range(-1, 2), repeat=2))
         got = UT.solve_polynomial_system([{}], bounds)
+        expected = brute_force_poly_system([], bounds)
         self.assertEqual(got, tuple(expected))
 
     def test_constant_nonzero_no_solution(self):
-        bounds = (3, 3)
         polynomials = [{(0, 0): 1}]
+        bounds = (3, 3)
         got = UT.solve_polynomial_system(polynomials, bounds)
-        self.assertEqual(got, ())
+        expected = brute_force_poly_system(polynomials, bounds)
+        self.assertEqual(got, tuple(expected))
 
     def test_linear_unique_solution(self):
         # x + y = 0 and x - y - 2 = 0 => (1, -1)
@@ -346,26 +347,25 @@ class TestPolynomialSolveBasic(unittest.TestCase):
         ]
         bounds = (5, 5)
         got = UT.solve_polynomial_system(polynomials, bounds)
-        self.assertEqual(got, ((1, -1),))
+        assert_solutions_valid(self, polynomials, bounds, got)
+        expected = brute_force_poly_system(polynomials, bounds)
+        self.assertEqual(got, tuple(expected))
 
     def test_multiple_solutions_circle(self):
         # x^2 + y^2 = 5 within bounds 3
         polynomials = [{(2, 0): 1, (0, 2): 1, (0, 0): -5}]
         bounds = (3, 3)
-        expected = sorted(
-            {
-                (1, 2), (1, -2), (-1, 2), (-1, -2),
-                (2, 1), (2, -1), (-2, 1), (-2, -1),
-            }
-        )
         got = UT.solve_polynomial_system(polynomials, bounds)
+        assert_solutions_valid(self, polynomials, bounds, got)
+        expected = brute_force_poly_system(polynomials, bounds)
         self.assertEqual(got, tuple(expected))
 
     def test_univariate_no_solution(self):
         polynomials = [{(2,): 1, (0,): 1}]  # x^2 + 1 = 0
         bounds = (5,)
         got = UT.solve_polynomial_system(polynomials, bounds)
-        self.assertEqual(got, ())
+        expected = brute_force_poly_system(polynomials, bounds)
+        self.assertEqual(got, tuple(expected))
 
     def test_conflicting_univariate_system(self):
         polynomials = [
@@ -374,7 +374,8 @@ class TestPolynomialSolveBasic(unittest.TestCase):
         ]
         bounds = (5,)
         got = UT.solve_polynomial_system(polynomials, bounds)
-        self.assertEqual(got, ())
+        expected = brute_force_poly_system(polynomials, bounds)
+        self.assertEqual(got, tuple(expected))
 
 
 class TestPolynomialSolveAdvanced(unittest.TestCase):
@@ -387,7 +388,9 @@ class TestPolynomialSolveAdvanced(unittest.TestCase):
         ]
         bounds = (501, 501)
         got = UT.solve_polynomial_system(polynomials, bounds)
-        self.assertEqual(got, ((-1, -1), (1, 1)))
+        assert_solutions_valid(self, polynomials, bounds, got)
+        expected = brute_force_poly_system(polynomials, (4, 4))
+        self.assertEqual(got, tuple(expected))
 
     def test_grobner_path_no_univariate_in_input(self):
         # No univariate polynomial in input, but Grobner basis yields x and y.
@@ -397,13 +400,16 @@ class TestPolynomialSolveAdvanced(unittest.TestCase):
         ]
         bounds = (501, 501)
         got = UT.solve_polynomial_system(polynomials, bounds)
-        self.assertEqual(got, ((0, 0),))
+        assert_solutions_valid(self, polynomials, bounds, got)
+        expected = brute_force_poly_system(polynomials, (4, 4))
+        self.assertEqual(got, tuple(expected))
 
     def test_backtrack_without_univariate(self):
         # x*y = 0 yields solutions with x=0 or y=0 (no univariate polynomial).
         polynomials = [{(1, 1): 1}]
         bounds = (4, 4)
         got = UT.solve_polynomial_system(polynomials, bounds)
+        assert_solutions_valid(self, polynomials, bounds, got)
         expected = brute_force_poly_system(polynomials, bounds)
         self.assertEqual(got, tuple(expected))
 
@@ -415,7 +421,9 @@ class TestPolynomialSolveAdvanced(unittest.TestCase):
         ]
         bounds = (10, 2)
         got = UT.solve_polynomial_system(polynomials, bounds)
-        self.assertEqual(got, ((7, 1),))
+        assert_solutions_valid(self, polynomials, bounds, got)
+        expected = brute_force_poly_system(polynomials, bounds)
+        self.assertEqual(got, tuple(expected))
 
     def test_three_variable_system(self):
         # x=y=z=1 solution
@@ -426,7 +434,9 @@ class TestPolynomialSolveAdvanced(unittest.TestCase):
         ]
         bounds = (3, 3, 3)
         got = UT.solve_polynomial_system(polynomials, bounds)
-        self.assertEqual(got, ((1, 1, 1),))
+        assert_solutions_valid(self, polynomials, bounds, got)
+        expected = brute_force_poly_system(polynomials, bounds)
+        self.assertEqual(got, tuple(expected))
 
     def test_large_bound_hensel_root_path(self):
         # Large bounds trigger non-bruteforce root finding in univariate step.
@@ -436,13 +446,16 @@ class TestPolynomialSolveAdvanced(unittest.TestCase):
         ]
         bounds = (40001, 40001)
         got = UT.solve_polynomial_system(polynomials, bounds)
-        self.assertEqual(got, ((-1, -1), (1, 1)))
+        assert_solutions_valid(self, polynomials, bounds, got)
+        expected = brute_force_poly_system(polynomials, (4, 4))
+        self.assertEqual(got, tuple(expected))
 
 
 class TestPolynomialSolveEdgeCases(unittest.TestCase):
     def test_empty_bounds(self):
         got = UT.solve_polynomial_system([], ())
-        self.assertEqual(got, ((),))
+        expected = brute_force_poly_system([], ())
+        self.assertEqual(got, tuple(expected))
 
 
 class TestPolynomialSolveRandomized(unittest.TestCase):
@@ -468,6 +481,78 @@ class TestPolynomialSolveRandomized(unittest.TestCase):
             got = UT.solve_polynomial_system(polynomials, bounds)
             self.assertEqual(got, tuple(expected))
             assert_solutions_valid(self, polynomials, bounds, got)
+
+
+class TestPolynomialSolveModular(unittest.TestCase):
+    """Regression tests for the modular (resultant / GVW) solver paths."""
+
+    def _check(self, polynomials, bounds):
+        got = UT.solve_polynomial_system(polynomials, bounds)
+        assert_solutions_valid(self, polynomials, bounds, got)
+        expected = brute_force_poly_system(polynomials, bounds)
+        self.assertEqual(got, tuple(expected))
+
+    def test_resultant_degree_drop(self):
+        # Leading coefficient of g w.r.t. elimination variable (lc_x(g) = 2y)
+        # vanishes at evaluation point y=0, corrupting interpolation.
+        A = 2
+        polynomials = [
+            {(2, 0): A, (0, 2): A, (0, 0): -25 * A},
+            {(1, 1): A, (0, 0): -12 * A},
+        ]
+        self._check(polynomials, (6, 6))
+
+    def test_large_coefficient_lift(self):
+        # Balanced lift of resultant coefficients produces garbage when
+        # true coefficients exceed p/2.
+        A = 50000
+        polynomials = [
+            {(2, 0): A, (0, 2): A, (0, 0): -25 * A},
+            {(1, 1): A, (0, 0): -12 * A},
+        ]
+        self._check(polynomials, (6, 6))
+
+    def test_scaled_system_sweep(self):
+        # Scaling all coefficients by A doesn't change solutions.
+        for A in [1, 3, 97, 10**6, 10**12]:
+            polynomials = [
+                {(2, 0): A, (0, 2): A, (0, 0): -25 * A},
+                {(1, 1): A, (0, 0): -12 * A},
+            ]
+            got = UT.solve_polynomial_system(polynomials, (6, 6))
+            assert_solutions_valid(self, polynomials, (6, 6), got)
+            expected = brute_force_poly_system(polynomials, (6, 6))
+            self.assertEqual(got, tuple(expected), f"failed for A={A}")
+
+    def test_gvw_nonlinear_bivariate(self):
+        # No univariate in input; GVW must derive one.
+        polynomials = [
+            {(2, 0): 1, (0, 1): -1},
+            {(1, 0): 1, (0, 1): 1, (0, 0): -2},
+        ]
+        self._check(polynomials, (6, 6))
+
+    def test_many_solutions_circle(self):
+        # Single equation, many lattice points.
+        polynomials = [{(2, 0): 1, (0, 2): 1, (0, 0): -25}]
+        self._check(polynomials, (6, 6))
+
+    def test_random_systems_scaled(self):
+        # Random small systems with coefficient scaling.
+        rng = random.Random(0xC0FFEE)
+        for _ in range(20):
+            num_vars = rng.choice([2, 3])
+            bounds = tuple(rng.randint(2, 5) for _ in range(num_vars))
+            num_polys = rng.randint(2, 4)
+            A = rng.choice([1, 7, 10**4])
+            polynomials = []
+            for __ in range(num_polys):
+                poly: dict[tuple[int, ...], int] = {}
+                for _t in range(rng.randint(2, 5)):
+                    exponents = tuple(rng.randint(0, 3) for _ in range(num_vars))
+                    poly[exponents] = poly.get(exponents, 0) + rng.randint(-5, 5) * A
+                polynomials.append({m: c for m, c in poly.items() if c})
+            self._check(polynomials, bounds)
 
 
 if __name__ == "__main__":
