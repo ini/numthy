@@ -679,8 +679,6 @@ class TestSmallRoots(unittest.TestCase):
         with self.assertRaises(ZeroDivisionError):
             UT.small_roots({(1,): 1}, 0)
         with self.assertRaises(ValueError):
-            UT.small_roots({(1,): 1}, 101, epsilon=0.0)
-        with self.assertRaises(ValueError):
             UT.small_roots({(1, 0): 1, (0, 1): 1}, 101)
         with self.assertRaises(ValueError):
             UT.small_roots({(1,): 1}, 101, bounds=(5, 6))
@@ -817,7 +815,7 @@ class TestSmallRoots(unittest.TestCase):
 
         try:
             UT._choose_jochemsz_may_params = choose_wrapper
-            roots = UT.small_roots(coeffs, 101, bounds=bounds, epsilon=0.2)
+            roots = UT.small_roots(coeffs, 101, bounds=bounds)
         finally:
             UT._choose_jochemsz_may_params = orig_choose
 
@@ -846,7 +844,7 @@ class TestSmallRoots(unittest.TestCase):
 
         try:
             UT._choose_jochemsz_may_params = choose_wrapper
-            roots = UT.small_roots(coeffs, 1_000_003, bounds=(B, B), epsilon=0.3)
+            roots = UT.small_roots(coeffs, 1_000_003, bounds=(B, B))
         finally:
             UT._choose_jochemsz_may_params = orig_choose
 
@@ -878,7 +876,7 @@ class TestSmallRoots(unittest.TestCase):
 
         try:
             UT._choose_jochemsz_may_params = choose_wrapper
-            roots = UT.small_roots(coeffs, 1_000_003, bounds=bounds, epsilon=0.45)
+            roots = UT.small_roots(coeffs, 1_000_003, bounds=bounds)
         finally:
             UT._choose_jochemsz_may_params = orig_choose
 

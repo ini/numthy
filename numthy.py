@@ -5371,7 +5371,7 @@ def small_roots(
     mod: int,
     bounds: tuple[int, ...] | None = None,
     *,
-    epsilon: float = 0.05,
+    m: int | None = None,
 ) -> list[tuple[int, ...]]:
     """
     Find small integer roots of a multivariate polynomial f(x₁, x₂, ...) ≡ 0 (mod M).
@@ -5393,13 +5393,13 @@ def small_roots(
     bounds : tuple[int, ...] or None
         Bound on root size, where |xᵢ| < bᵢ for each variable xᵢ.
         Required for multivariate polynomials. For univariate, defaults to M^(1/deg).
-    epsilon : float
-        Parameter controlling lattice dimension vs root bound trade-off.
-        Smaller epsilon allows for larger bounds but requires larger lattice (slower).
+    m : int or None
+        Coppersmith lattice parameter controlling the number of shift polynomials.
+        Larger m builds a bigger lattice that can find larger roots, but is slower.
+        If not provided, automatically selects the smallest sufficient m.
 
     Complexity
     ----------
-    Brute force path is O(Π(2Bᵢ - 1)) time
     Lattice path is dominated by LLL on an H × W matrix,
     about O(H⁵W log³A) time and O(H² + HW) space, where A is the max lattice
     """
@@ -5414,8 +5414,6 @@ def small_roots(
         raise ValueError("Inconsistent monomial tuple lengths")
     if any(not isinstance(e, int) or e < 0 for monomial in f for e in monomial):
         raise ValueError("Exponents must be nonnegative integers")
-    if epsilon <= 0:
-        raise ValueError("epsilon must be > 0")
     if bounds is None and num_variables > 1:
         raise ValueError("bounds required for multivariate instances")
     if bounds and len(bounds) != num_variables:
@@ -5443,7 +5441,7 @@ def small_roots(
 
     # Build lattice, reduce via LLL, and extract relations satisfying Howgrave-Graham.
     weights = _monomial_weights_from_bounds(bounds)
-    m, shifts, basis = _choose_jochemsz_may_params(f, bounds, M, epsilon)
+    m, shifts, basis = _choose_jochemsz_may_params(f, bounds, M, m)
     lattice, scales, basis_index = _make_coppersmith_lattice(shifts, basis, bounds)
     relations = _extract_coppersmith_relations(lll_reduce(lattice), basis, scales, M**m)
     hg_relations, other_relations = relations
@@ -5846,25 +5844,26 @@ def _choose_jochemsz_may_params(
     f: Polynomial[int],
     bounds: tuple[int, ...],
     M: int,
-    epsilon: float,
+    m: int | None = None,
 ) -> tuple[int, list[Polynomial[int]], list[Monomial]]:
     """
-    Choose m and t parameters based on epsilon.
+    Choose Jochemsz-May hyperparameter m and build shift polynomials.
+    If m is given, uses it directly. Otherwise picks the smallest m
+    whose lattice is sufficiently overdetermined.
     Returns (m, shifted_polynomials, monomial_basis).
     """
-    # Set initial m parameter based on epsilon
-    m0 = max(1, ceil(1 / (max(1, _poly_degree(f)) * epsilon)))
-
-    # Pick smallest m whose lattice is sufficiently overdetermined (rows - cols >= n)
-    num_variables = len(bounds)
     f_weighted_degree = _poly_degree(f, weights=_monomial_weights_from_bounds(bounds))
-    for m in range(1, m0 + 1):
+    if m is not None:
+        t = m * f_weighted_degree
+        polynomials, basis = _build_coppersmith_shifts(f, bounds, M, m, t)
+        return (m, polynomials, basis)
+
+    num_variables = len(bounds)
+    for m in itertools.count(start=1):
         t = m * f_weighted_degree
         polynomials, basis = _build_coppersmith_shifts(f, bounds, M, m, t)
         if len(polynomials) - len(basis) >= num_variables:
             return (m, polynomials, basis)
-
-    return (m0, polynomials, basis)
 
 def _make_coppersmith_lattice(
     shifted_polynomials: list[Polynomial[int]],
