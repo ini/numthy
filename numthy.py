@@ -563,6 +563,7 @@ def _lmo_p2(
     F_y: Number,
     small_primes: tuple[int, ...],
     f: Callable[[int], Number] | None = None,
+    block_size: int = 64,
 ) -> Number:
     """
     Compute P2(x, a) from the LMO algorithm.
@@ -581,7 +582,7 @@ def _lmo_p2(
     # Also accumulate the sum f(p)^2 for all primes in the interval (y, sqrt(x)]
     P2 = 0
     sum_f2 = 0
-    F_sqrt_x = F_y
+    F_sqrt_x = F_prev = F_y
     F_segment = [F_y]
     for low in range(sieve_start, sieve_limit + 1, sieve_size):
         # Sieve the interval [low, high)
@@ -589,29 +590,45 @@ def _lmo_p2(
         high = min(low + sieve_size, sieve_limit + 1)
         sieve = _lmo_odd_sieve(low, high - low, small_primes[1:], max_prime=isqrt(high))
 
-        # Get f(t) for t ∈ [low, high)
-        if f is not None:
-            f2_primes = itertools.compress(range(low, min(high, sqrt_x + 1), 2), sieve)
-            sum_f2 += sum(f(p)**2 for p in f2_primes)
-            f_segment = [f(low + 2*i) if sieve[i] else 0 for i in range(len(sieve))]
-        else:
-            f_segment = sieve
-
-        # Calculate prime sums F(t) = sum_{p <= t} f(p) for t ∈ [low, high)
-        F_segment = list(itertools.accumulate(f_segment, initial=F_segment[-1]))[1:]
-        if low <= sqrt_x < high:
-            F_sqrt_x = F_segment[(sqrt_x - low) >> 1]
-
         # Find all primes p ∈ (y, sqrt(x)] such that low <= x/p < high
         # by similarly sieving the inverse interval (x/high, x/low]
         low_ = (max(x // high, y) + 1) | 1
         high_ = min(x // low, sqrt_x)
         sieve_ = _lmo_odd_sieve(
             low_, high_ - low_ + 1, small_primes[1:], max_prime=isqrt(high_))
+        segment_primes = itertools.compress(range(low_, high_ + 1, 2), sieve_)
 
-        # Accumulate over all x/p in our main interval [low, high)
-        for p in itertools.compress(range(low_, high_ + 1, 2), sieve_):
-            P2 += F_segment[(x // p - low) >> 1] * (f(p) if f else 1)
+        # Get f(t) for t ∈ [low, high)
+        # Also calculate prime sums F(t) = sum_{p <= t} f(p) for t ∈ [low, high)
+        if f is not None:
+            f2_primes = itertools.compress(range(low, min(high, sqrt_x + 1), 2), sieve)
+            sum_f2 += sum(f(p)**2 for p in f2_primes)
+            f_segment = [f(low + 2*i) if sieve[i] else 0 for i in range(len(sieve))]
+            F_segment = list(itertools.accumulate(f_segment, initial=F_prev))[1:]
+            if low <= sqrt_x < high:
+                F_sqrt_x = F_segment[(sqrt_x - low) >> 1]
+
+            # Accumulate over all x/p in our main interval [low, high)
+            P2 += sum(f(p) * F_segment[(x // p - low) >> 1] for p in segment_primes)
+            F_prev = F_segment[-1]
+        else:
+            blocks = [sieve[i:i+block_size] for i in range(0, len(sieve), block_size)]
+            block_sums = (block.count(1) for block in blocks)
+            block_prefix_sums = list(itertools.accumulate(block_sums, initial=0))
+
+            def pi(x):
+                index = (x - low) >> 1
+                block_index, offset = divmod(index, block_size)
+                block = blocks[block_index]
+                count = F_prev + block_prefix_sums[block_index]
+                return count + block[:offset+1].count(1)
+
+            if low <= sqrt_x < high:
+                F_sqrt_x = pi(sqrt_x)
+
+            # Accumulate over all x/p in our main interval [low, high)
+            P2 += sum(pi(x // p) for p in segment_primes)
+            F_prev = F_prev + block_prefix_sums[-1]
 
     if f is None:
         sum_f2 = F_sqrt_x - F_y
