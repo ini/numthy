@@ -389,8 +389,19 @@ class TestPolynomialSolveAdvanced(unittest.TestCase):
         bounds = (501, 501)
         got = UT.solve_polynomial_system(polynomials, bounds)
         assert_solutions_valid(self, polynomials, bounds, got)
-        expected = brute_force_poly_system(polynomials, (4, 4))
-        self.assertEqual(got, tuple(expected))
+        self.assertEqual(got, ((-1, -1), (1, 1)))
+
+    def test_linear_subsystem_pruning(self):
+        # Mixed system: linear equation determines one variable,
+        # remaining nonlinear equation solved by substitution.
+        polynomials = [
+            {(0, 1): 1, (0, 0): -3},              # y = 3
+            {(2, 0): 1, (0, 2): 1, (0, 0): -25},  # x^2 + y^2 = 25
+        ]
+        bounds = (501, 501)
+        got = UT.solve_polynomial_system(polynomials, bounds)
+        assert_solutions_valid(self, polynomials, bounds, got)
+        self.assertEqual(got, ((-4, 3), (4, 3)))
 
     def test_grobner_path_no_univariate_in_input(self):
         # No univariate polynomial in input, but Grobner basis yields x and y.
@@ -401,8 +412,7 @@ class TestPolynomialSolveAdvanced(unittest.TestCase):
         bounds = (501, 501)
         got = UT.solve_polynomial_system(polynomials, bounds)
         assert_solutions_valid(self, polynomials, bounds, got)
-        expected = brute_force_poly_system(polynomials, (4, 4))
-        self.assertEqual(got, tuple(expected))
+        self.assertEqual(got, ((0, 0),))
 
     def test_backtrack_without_univariate(self):
         # x*y = 0 yields solutions with x=0 or y=0 (no univariate polynomial).
@@ -413,8 +423,8 @@ class TestPolynomialSolveAdvanced(unittest.TestCase):
         expected = brute_force_poly_system(polynomials, bounds)
         self.assertEqual(got, tuple(expected))
 
-    def test_variable_permutation_with_bounds(self):
-        # Bounds force permutation (second variable has smaller bound).
+    def test_asymmetric_bounds(self):
+        # Variables have very different bounds.
         polynomials = [
             {(1, 0): 1, (0, 0): -7},  # x - 7
             {(0, 1): 1, (0, 0): -1},  # y - 1
@@ -447,8 +457,7 @@ class TestPolynomialSolveAdvanced(unittest.TestCase):
         bounds = (40001, 40001)
         got = UT.solve_polynomial_system(polynomials, bounds)
         assert_solutions_valid(self, polynomials, bounds, got)
-        expected = brute_force_poly_system(polynomials, (4, 4))
-        self.assertEqual(got, tuple(expected))
+        self.assertEqual(got, ((-1, -1), (1, 1)))
 
 
 class TestPolynomialSolveEdgeCases(unittest.TestCase):
@@ -484,7 +493,7 @@ class TestPolynomialSolveRandomized(unittest.TestCase):
 
 
 class TestPolynomialSolveModular(unittest.TestCase):
-    """Regression tests for the modular (resultant / GVW) solver paths."""
+    """Regression tests for the GVW / FGLM solver paths."""
 
     def _check(self, polynomials, bounds):
         got = UT.solve_polynomial_system(polynomials, bounds)
@@ -492,9 +501,8 @@ class TestPolynomialSolveModular(unittest.TestCase):
         expected = brute_force_poly_system(polynomials, bounds)
         self.assertEqual(got, tuple(expected))
 
-    def test_resultant_degree_drop(self):
-        # Leading coefficient of g w.r.t. elimination variable (lc_x(g) = 2y)
-        # vanishes at evaluation point y=0, corrupting interpolation.
+    def test_scaled_bivariate_circle_system(self):
+        # Bivariate system with nontrivial coefficient scaling.
         A = 2
         polynomials = [
             {(2, 0): A, (0, 2): A, (0, 0): -25 * A},
@@ -502,9 +510,8 @@ class TestPolynomialSolveModular(unittest.TestCase):
         ]
         self._check(polynomials, (6, 6))
 
-    def test_large_coefficient_lift(self):
-        # Balanced lift of resultant coefficients produces garbage when
-        # true coefficients exceed p/2.
+    def test_large_coefficient_system(self):
+        # Large coefficients stress the modular arithmetic path.
         A = 50000
         polynomials = [
             {(2, 0): A, (0, 2): A, (0, 0): -25 * A},

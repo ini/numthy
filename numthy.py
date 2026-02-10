@@ -20,7 +20,7 @@ from fractions import Fraction
 from functools import cache, lru_cache, partial, reduce
 from heapq import heappop, heappush
 from math import ceil, fsum, gcd, inf, isfinite, isqrt, lcm, log, prod, sqrt
-from operator import mul, xor
+from operator import add, mul, xor
 from typing import Callable, Collection, Iterator, TypeAlias, TypeVar
 
 
@@ -4512,7 +4512,10 @@ def solve_polynomial_system(
     Polynomials are represented as dictionaries mapping monomial tuples to coefficients,
     e.g. {(2, 0): 3, (0, 1): -5, (0, 0): 7} represents 3x² - 5y + 7.
 
-    Not guaranteed to find *all* solutions for large bounds.
+    Uses the Gao-Volny-Wang (GVW) algorithm to find a Grobner grevlex basis over Fₚ,
+    the Faugère-Gianni-Lazard-Mora (FGLM) algorithm to convert to a lex basis,
+    and either extracts univariate polynomials or solves the system via backtracking.
+    Prunes by directly solving the linear subsystem, if one exists.
 
     Parameters
     ----------
@@ -4526,11 +4529,66 @@ def solve_polynomial_system(
     tuple[tuple[int, ...], ...]
         Integer solutions within the given bounds, sorted lexicographically
     """
-    # Permute variables so smallest bounds come first (better for backtracking)
-    polynomials, bounds, index = _permute_variables(polynomials, bounds)
-    unpermute = lambda x: tuple(x[index[i]] for i in range(len(bounds)))
-    solutions = _solve_polynomial_system(polynomials, bounds)
-    return tuple(sorted(map(unpermute, solutions)))
+    polynomials = [{m: c for m, c in f.items() if c} for f in polynomials]
+    polynomials = [f for f in polynomials if f]
+    n = len(bounds)
+    if n == 0: return ((),)
+
+    # Reject constant nonzero polynomials
+    for f in polynomials:
+        if _poly_num_variables(f) == 0 and any(f.values()):
+            return ()
+
+    # Solve linear subsystem and substitute determined variables
+    linear = [f for f in polynomials if _poly_degree(f) <= 1]
+    if linear:
+        zero = (0,) * n
+        A = [[f.get(zero[:i] + (1,) + zero[i+1:], 0) for i in range(n)] for f in linear]
+        b = [-f.get(zero, 0) for f in linear]
+        x, basis = solve_linear_system(A, b, nullspace=True)
+        if x is None: return ()
+        for i in range(n):
+            if all(v[i] == 0 for v in basis):
+                if abs(x[i]) >= bounds[i]: return ()  # no solution within bounds
+                return _solve_by_substitution(polynomials, bounds, i, [x[i]])
+
+    # Univariate detection
+    if (uv := _best_univariate(polynomials, bounds)) is not None:
+        variable_index, coefficients = uv
+        variable_bound = bounds[variable_index]
+        values = _find_integer_roots_bounded_univariate(coefficients, variable_bound)
+        return _solve_by_substitution(polynomials, bounds, variable_index, values)
+
+    # Enumerate cheapest variable for small bounds
+    for variable_index in range(n):
+        if (b := bounds[variable_index]) <= 10:
+            values = range(-b + 1, b)
+            return _solve_by_substitution(polynomials, bounds, variable_index, values)
+
+    # Compute GVW grevlex basis, convert to lex via FGLM, and extract univariates
+    p = random_prime((2 * max(bounds)).bit_length() + 1)
+    if n >= 2:
+        if (grobner_basis := _gvw(polynomials, p)) is None: return ()
+        grobner_basis = _fglm(grobner_basis, p) or grobner_basis
+        for f in grobner_basis:
+            for i in range(n):
+                coefficients = _poly_univariate_coefficients(f, i)
+                if coefficients and len(coefficients) > 1:
+                    roots = _polynomial_roots_mod_prime(coefficients, p)
+                    roots = (r if r < p // 2 else r - p for r in roots)
+                    if (roots := [r for r in roots if abs(r) < bounds[i]]):
+                        return _solve_by_substitution(polynomials, bounds, i, roots)
+
+    # Backtracking on cheapest variable
+    score = lambda i: (
+        0 if any(_poly_univariate_coefficients(f, i) for f in polynomials) else 1,
+        max((m[i] for f in polynomials for m in f), default=0),
+        sum(1 for f in polynomials if any(m[i] > 0 for m in f)),
+        bounds[i],
+    )
+    variable_index = min(range(n), key=score)
+    values = range(-bounds[variable_index] + 1, bounds[variable_index])
+    return _solve_by_substitution(polynomials, bounds, variable_index, values)
 
 def _verify_linear_system(A: Matrix, x: Vector, b: Vector) -> bool:
     """
@@ -4709,6 +4767,12 @@ def _hermite_normal_form(A: Matrix[int]) -> tuple[list[list[int]], list[list[int
 
     return (H, U)
 
+def _grevlex(m: Monomial) -> tuple[int, tuple[int, ...]]:
+    """
+    Graded reverse lexicographic (grevlex) monomial ordering key.
+    """
+    return (sum(m), tuple(-e for e in reversed(m)))
+
 def _poly_num_variables(f: Polynomial) -> int:
     """
     Return the number of variables in multivariate polynomial f.
@@ -4739,13 +4803,6 @@ def _poly_make_canonical(f: Polynomial[int]) -> Polynomial[int]:
     if f[max(f)] < 0: f = {m: -c for m, c in f.items()}
     return f
 
-def _poly_sub(f: Polynomial, g: Polynomial) -> Polynomial:
-    """
-    Subtract two multivariate polynomials. Returns f - g.
-    """
-    out = {**f, **{m: f.get(m, 0) - c for m, c in g.items()}}
-    return {m: c for m, c in out.items() if c}
-
 def _poly_mul(f: Polynomial, g: Polynomial) -> Polynomial:
     """
     Multiply two multivariate polynomials. Returns f * g.
@@ -4757,17 +4814,7 @@ def _poly_mul(f: Polynomial, g: Polynomial) -> Polynomial:
 
     return {m: c for m, c in out.items() if c}
 
-def _poly_make_monic(f: Polynomial) -> Polynomial[Fraction]:
-    """
-    Divide polynomial f by its leading coefficient to make it monic.
-    """
-    if not (f := {m: Fraction(c) for m, c in f.items() if c}): return {}
-    return f if (lead_c := f[max(f)]) == 1 else {m: c / lead_c for m, c in f.items()}
-
-def _poly_univariate_coefficients(
-    f: Polynomial[int],
-    variable_index: int,
-) -> list[int] | None:
+def _poly_univariate_coefficients(f: Polynomial, variable_index: int) -> list | None:
     """
     Extract univariate coefficients for variable at index, or None if not univariate.
     """
@@ -4795,10 +4842,10 @@ def _poly_substitute(f: Polynomial, variable_index: int, value: int) -> Polynomi
     return {m: c for m, c in out.items() if c}
 
 def _poly_apply_value(
-    polynomials: list[Polynomial[int]],
+    polynomials: list[Polynomial],
     variable_index: int,
     value: int,
-) -> list[Polynomial[int]] | None:
+) -> list[Polynomial] | None:
     """
     Substitute a value at the given variable into all polynomials.
     Returns None if any becomes inconsistent.
@@ -4807,69 +4854,348 @@ def _poly_apply_value(
     non_zero = [g for g in substituted if g]
     return None if any(_poly_num_variables(g) == 0 for g in non_zero) else non_zero
 
-def _poly_reduce(
-    f: Polynomial[Fraction],
-    polynomials: list[Polynomial[Fraction]],
-) -> Polynomial[Fraction]:
+def _poly_fp_sub(f: Polynomial[int], g: Polynomial[int], p: int) -> Polynomial[int]:
     """
-    Reduce polynomial f modulo a collection of polynomials via multivariate division.
+    Subtract two multivariate polynomials over Fₚ. Returns f - g mod p.
     """
-    f, reduced = dict(f), {}
+    difference = f.copy()
+    for monomial, coefficient in g.items():
+        if c := (difference.get(monomial, 0) - coefficient) % p:
+            difference[monomial] = c
+        elif monomial in difference:
+            del difference[monomial]
+
+    return difference
+
+def _poly_fp_mul(f: Polynomial[int], g: Polynomial[int], p: int) -> Polynomial[int]:
+    """
+    Multiply two multivariate polynomials over Fₚ. Returns f * g mod p.
+    """
+    product = {}
+    for monomial_f, coefficient_f in f.items():
+        for monomial_g, coefficient_g in g.items():
+            monomial = tuple(map(add, monomial_f, monomial_g))
+            product[monomial] = product.get(monomial, 0) + coefficient_f * coefficient_g
+
+    return {m: c % p for m, c in product.items() if c % p}
+
+def _poly_fp_scale(f: Polynomial[int], k: int, p: int) -> Polynomial[int]:
+    """
+    Scale multivariate polynomial f by a factor of k over Fₚ. Returns k * f mod p.
+    """
+    if k == 1: return f
+    scaled = {m: (c * k) % p for m, c in f.items()}
+    return {m: c for m, c in scaled.items() if c}
+
+def _poly_fp_monic(f: Polynomial[int], p: int) -> Polynomial[int]:
+    """
+    Make multivariate polynomial f monic over Fₚ (grevlex leading coefficient = 1).
+    """
+    if not f or (leading_coefficient := f[max(f, key=_grevlex)]) == 1:
+        return f
+    inv = pow(leading_coefficient, -1, p)
+    return {m: (c * inv) % p for m, c in f.items()}
+
+def _poly_fp_reduce(
+    f: Polynomial[int],
+    G: list[Polynomial[int]],
+    p: int,
+) -> Polynomial[int]:
+    """
+    Reduce multivariate polynomial f modulo G over Fₚ.
+    Returns the remainder (the normal form when G is a Gröbner basis).
+    """
+    f, remainder = f.copy(), {}
+    G = [g for g in G if g]
+    G_lead_monomials = [max(g, key=_grevlex) for g in G]
     while f:
-        c_f = f[m_f := max(f)]
-        for g in polynomials:
-            if not g: continue
-            m_g = max(g)
-            if all(ea <= eb for ea, eb in zip(m_g, m_f)):
-                shift = tuple(eb - ea for ea, eb in zip(m_g, m_f))
-                f = _poly_sub(f, _poly_mul(g, {shift: c_f / g[m_g]}))
+        f_lead_monomial = max(f, key=_grevlex)
+        for g, g_lead_monomial in zip(G, G_lead_monomials):
+            if all(a >= b for a, b in zip(f_lead_monomial, g_lead_monomial)):
+                m = tuple(a - b for a, b in zip(f_lead_monomial, g_lead_monomial))
+                c = f[f_lead_monomial] * pow(g[g_lead_monomial], -1, p) % p
+                f = _poly_fp_sub(f, _poly_fp_mul(g, {m: c}, p), p)
                 break
         else:
-            reduced[m_f] = reduced.get(m_f, Fraction(0)) + c_f
-            del f[m_f]
+            remainder[f_lead_monomial] = f.pop(f_lead_monomial)
 
-    return {m: c for m, c in reduced.items() if c}
+    return {m: c for m, c in remainder.items() if c}
 
-def _grobner_basis(
-    polynomials: list[Polynomial[int]],
-    groebner_max_basis: int = 200,
-) -> list[Polynomial[int]] | None:
+def _gvw(polynomials: list[Polynomial[int]], p: int) -> list[Polynomial[int]] | None:
     """
-    Use Buchberger's algorithm to transform a set of polynomials into a Gröbner basis.
-    """
-    # Find Gröbner basis G
-    G = [_poly_make_monic(f) for f in polynomials if f]
-    pairs = list(itertools.combinations(range(len(G)), 2))
-    while pairs and len(G) < groebner_max_basis:
-        # Cancel leading terms of f and g to compute the S-polynomial
-        f, g = (G[i] for i in pairs.pop())
-        f_monomial, g_monomial = max(f), max(g)
-        lcm_monomial = tuple(map(max, f_monomial, g_monomial))
-        shift_f = tuple(eb - ea for ea, eb in zip(f_monomial, lcm_monomial))
-        shift_g = tuple(eb - ea for ea, eb in zip(g_monomial, lcm_monomial))
-        term_f = _poly_mul(f, {shift_f: 1 / f[f_monomial]})
-        term_g = _poly_mul(g, {shift_g: 1 / g[g_monomial]})
-        S = _poly_sub(term_f, term_g)  # leading terms cancel
+    Find a Gröbner basis for the given polynomials over Fₚ.
+    Returns reduced basis mod p, or None if 1 ∈ ideal.
+    Uses the Gao-Volny-Wang (GVW) algorithm.
 
-        # Reduce S against current basis (multivariate polynomial division)
-        h = _poly_make_monic(_poly_reduce(S, G))
-        if len(h) == 1 and not any(next(iter(h))):
-            return None  # contradiction: 1 = 0
-        if h:
-            # Add new polynomial to basis and queue pairs with it
-            G.append(h)
-            pairs.extend((k, len(G) - 1) for k in range(len(G) - 1))
+    See: https://www.math.clemson.edu/~sgao/papers/gvw.pdf
+
+    Complexity
+    ----------
+    O(D³) operations in Fₚ for zero-dimensional ideals, where D = ∏ deg(fᵢ)
+    """
+    if not polynomials: return []
+    one = (0,) * _poly_num_variables(polynomials[0])  # constant monomial
+
+    # Monomial arithmetic in polynomial ring R = F_p[x_1, ..., x_n]
+    mdivides = lambda a, b: all(x <= y for x, y in zip(a, b))
+    mdiv = lambda a, b: tuple(x - y for x, y in zip(a, b)) if mdivides(b, a) else None
+    mmul = lambda a, b: tuple(x + y for x, y in zip(a, b))
+    mshift = lambda f, t: {mmul(m, t): c for m, c in f.items()}
+    lm = lambda x: max(x, key=_grevlex) if x else None
+    lc = lambda x: x[lm(x)] if x else None
+
+    # Initialize generators of the ideal as monic polynomials over F_p
+    generators = [{m: c % p for m, c in f.items() if c % p} for f in polynomials]
+    generators = [_poly_fp_monic(f, p) for f in generators if f]
+    generator_lms = [lm(g) for g in generators]
+    if not generators: return []
+
+    # Signatures as terms x^alpha * E_i in R^m, stored as (monomial, index)
+    sig_mul = lambda t, S: (mmul(t, S[0]), S[1])
+    sig_divides = lambda A, B: A[1] == B[1] and mdivides(A[0], B[0])
+    sig_key = cache(lambda m, i: (_grevlex(mmul(m, generator_lms[i])), i, _grevlex(m)))
+    sig_compare = lambda x, y: (sig_key(*x) > sig_key(*y)) - (sig_key(*x) < sig_key(*y))
+
+    # Initialize basis to store (signature, polynomial, leading_monomial) tuples
+    # Also store syzygy leading terms, and J-pair priority queue
+    basis, syzygy_leading_terms, j_pairs = [], [], []
+    processed_terms, heap_counter = set(), 0
+    for i, g in enumerate(generators):
+        T = (one, i)
+        key = (sig_key(*T), _grevlex(generator_lms[i]), i)
+        heappush(j_pairs, (key, T, g))
+        heap_counter += 1
+
+    # Suitable (T2, v2) gives the reduction v = v1 - c*t*v2
+    # where t = lm(v1) / lm(v2), and c = lc(v1) / lc(v2)
+    def regular_top_reduction(T1, v1) -> Polynomial | None:
+        lm_v1 = lm(v1)
+        for T2, v2, lm_v2 in basis:
+            if (t := mdiv(lm_v1, lm_v2)) is None: continue
+            comparison = sig_compare(sig_mul(t, T2), T1)
+            if comparison <= 0 and (comparison != 0 or lc(v1) != lc(v2)):
+                c = lc(v1) * pow(lc(v2), -1, p) % p
+                v = _poly_fp_sub(v1, _poly_fp_mul({t: c}, v2, p), p)
+                scale = pow((1 - c) % p, -1, p) if comparison == 0 else 1
+                return _poly_fp_scale(v, scale, p)
+
+    bezout_bound = prod(max(_poly_degree(g), 1) for g in generators)
+    while j_pairs and len(basis) < 2 * bezout_bound:
+        # Pop minimal-signature pair (T1, v1) from our J-pairs
+        _, T1, v1 = heappop(j_pairs)
+        if T1 in processed_terms: continue
+        if any(sig_divides(T, T1) for T in syzygy_leading_terms): continue
+
+        # Skip if (T1, v1) is already eventually super top-reducible by current basis
+        lm_v1 = lm(v1)
+        is_eventually_super_top_reducible = any(
+            sig_divides(T2, T1)
+            and sig_compare(sig_mul(lm_v2, T1), sig_mul(lm_v1, T2)) < 0
+            for T2, _, lm_v2 in basis
+        )
+        if is_eventually_super_top_reducible: continue
+
+        # Reduce the pair (T1, v1) as much as possible via regular top-reductions
+        while v1 and (v := regular_top_reduction(T1, v1)) is not None: v1 = v
+        processed_terms.add(T1)
+
+        # If v1 is 0, then we have already found a syzygy
+        if not v1:
+            syzygy_leading_terms.append(T1)
+            continue
+
+        # Check for inconsistencies
+        if (lm_v1 := lm(v1)) == one: return None
+
+        # Check if (T1, v1) is super top-reducible
+        is_super_top_reducible = any(
+            sig_divides(T2, T1)
+            and sig_compare(sig_mul(lm_v2, T1), sig_mul(lm_v1, T2)) == 0
+            and lc(v1) == lc(v2)
+            for T2, v2, lm_v2 in basis
+        )
+        if is_super_top_reducible: continue
+
+        # Update basis with (T1, v1)
+        v1 = _poly_fp_monic(v1, p)
+        basis.append((T1, v1, lm_v1))
+
+        # Update with new syzigies and J-pairs
+        for T2, v2, lm_v2 in basis:
+            # Store the leading terms of the principal syzygies v2*u1 - v1*u2
+            # That is, leading term T = max(T1*lm(v2), T2*lm(v1))
+            s1, s2 = sig_mul(lm_v1, T2), sig_mul(lm_v2, T1)
+            comparison = sig_compare(s1, s2)
+            if comparison != 0 or lc(v1) != lc(v2):
+                syzygy_leading_terms.append(s1 if comparison > 0 else s2)
+
+            # Add new J-pairs whose signatures are not reducible by our current syzygies
+            # For each distinct signature T, store the max J-pair with v = t_i*v_i
+            t = tuple(map(max, lm_v1, lm_v2))  # LCM(lm(v1), lm(v2))
+            t1, t2 = mdiv(t, lm_v1), mdiv(t, lm_v2)
+            s1, s2 = sig_mul(t1, T1), sig_mul(t2, T2)
+            comparison = sig_compare(s1, s2)
+            if comparison != 0 or lc(v1) != lc(v2):
+                T, v = (s1, mshift(v1, t1)) if comparison > 0 else (s2, mshift(v2, t2))
+                key = (sig_key(*T), _grevlex(lm(v)), heap_counter)
+                heappush(j_pairs, (key, T, v))
+                heap_counter += 1
 
     # Interreduction to simplify the basis
+    G = [v for _, v, _ in basis]
     for i in range(len(G)):
-        G[i] = _poly_reduce(G[i], G[:i] + G[i + 1:])
+        G[i] = _poly_fp_reduce(G[i], G[:i] + G[i + 1:], p)
 
-    # Convert back to integer coefficients
-    return [
-        _poly_make_canonical({m: int(c * denominator) for m, c in g.items()})
-        for g in (_poly_make_monic(f) for f in G if f)
-        for denominator in [lcm(*(c.denominator for c in g.values()))]
+    return [_poly_fp_monic(g, p) for g in G if g]
+
+def _matphi(
+    grevlex_basis: list[Polynomial[int]],
+    p: int,
+) -> tuple[list[Monomial], list[Matrix[int]]]:
+    """
+    Compute the matrix representation of φ : R → R/I that sends a monomial over Fₚ
+    to its normal form.
+
+    Returns (natural_basis, matrices) where natural_basis = B(G) is the
+    monomial vector space basis of R/I, matrices[i] is the matrix of the map
+    m -> NormalForm(x_i * m) on B(G).
+
+    """
+    n = _poly_num_variables(grevlex_basis[0])
+    one = (0,) * n
+    multiply_variable = lambda m, i: m[:i] + (m[i] + 1,) + m[i+1:]
+    mdivides = lambda a, b: all(a[j] <= b[j] for j in range(n))
+    grevlex_lead_monomials = [max(g, key=_grevlex) for g in grevlex_basis]
+
+    # Build B(G), the set of reduced monomials not divisible by any leading monomial
+    # These form a basis for the quotient ring R/I as an F_p-vector space
+    is_reducible = lambda m: any(mdivides(lm, m) for lm in grevlex_lead_monomials)
+    natural_basis, visited, queue = [one], {one}, [one]
+    while queue:
+        m = queue.pop(0)
+        for i in range(n):
+            child = multiply_variable(m, i)
+            if child not in visited and not is_reducible(child):
+                visited.add(child)
+                queue.append(child)
+                natural_basis.append(child)
+
+    # Build multiplication matrices T(G)
+    # Column c of M[i] = NF(x_i * natural_basis[c]) as a coordinate vector
+    dim = len(natural_basis)
+    natural_basis.sort(key=_grevlex)
+    basis_index = {m: i for i, m in enumerate(natural_basis)}
+    matrices = [[[0] * dim for _ in range(dim)] for _ in range(n)]
+    for i in range(n):
+        for col, basis_monomial in enumerate(natural_basis):
+            if (monomial := multiply_variable(basis_monomial, i)) in basis_index:
+                matrices[i][basis_index[monomial]][col] = 1
+            else:
+                for m, c in _poly_fp_reduce({monomial: 1}, grevlex_basis, p).items():
+                    matrices[i][basis_index[m]][col] = c % p
+
+    return natural_basis, matrices
+
+def _fglm(grevlex_basis: list[Polynomial[int]], p: int) -> list[Polynomial[int]] | None:
+    """
+    Convert a grevlex Gröbner basis to a lex Gröbner basis over Fₚ.
+    Returns the lex basis, or None if the ideal is not zero-dimensional.
+    Uses the Faugère-Gianni-Lazard-Mora (FGLM) algorithm.
+
+    See: https://doi.org/10.1006/jsco.1993.1051
+    See: https://arxiv.org/pdf/2509.03346
+
+    Complexity
+    ----------
+    O(nD³) operations in Fₚ, where n is the number of variables
+    where D is the dimension of the quotient ring R/I
+    """
+    grevlex_basis = [g for g in grevlex_basis if g]
+    if not grevlex_basis: return []
+
+    n = _poly_num_variables(grevlex_basis[0])
+    if n <= 1: return grevlex_basis
+
+    # Check zero-dimensionality (each variable needs a pure power leading monomial)
+    grevlex_monomials = [max(g, key=_grevlex) for g in grevlex_basis]
+    if not all(any(sum(lm) == lm[i] for lm in grevlex_monomials) for i in range(n)):
+        return None
+
+    result = _matphi(grevlex_basis, p)
+    natural_basis, M = result
+
+    one = (0,) * n
+    dim = len(natural_basis)
+    multiply_variable = lambda m, i: m[:i] + (m[i] + 1,) + m[i+1:]
+    mdivides = lambda a, b: all(a[j] <= b[j] for j in range(n))
+    matvec = lambda A, v: [
+        sum(A[r][c] * v[c] for c in range(dim)) % p for r in range(dim)]
+
+    # Enumerate monomials in increasing lex order (Python tuples compare lex natively)
+    # Check independence via incremental echelon form in O(D^2) per vector
+    # Maintain invariant row = sum normal_form_weights[j] * NF(mbasis[j])
+    echelon = []  # [(pivot_column, row, normal_form_weights)]
+    lex_basis, staircase, quotient_ring_basis = [], [], []
+    normal_forms = {one: [int(i == 0) for i in range(dim)]}
+    candidate_monomials, processed_monomials = [one], set()
+
+    while candidate_monomials:
+        monomial = heappop(candidate_monomials)
+        if monomial in processed_monomials: continue
+        processed_monomials.add(monomial)
+        if any(mdivides(lm, monomial) for lm in staircase): continue
+
+        # Reduce NormalForm(m) against quotient ring basis (in echelon form)
+        normal_form = normal_forms.pop(monomial)
+        v = normal_form.copy()
+        transform = {}
+        for pivot_column, pivot_row, normal_form_weights in echelon:
+            if v[pivot_column]:
+                factor = v[pivot_column] * pow(pivot_row[pivot_column], -1, p) % p
+                v = [(x - factor * y) % p for x, y in zip(v, pivot_row)]
+                for m, c in normal_form_weights.items():
+                    transform[m] = (transform.get(m, 0) + factor * c) % p
+
+        if any(v):
+            # When v != 0, NormalForm(m) is linearly independent with respect to
+            # the current quotient ring, so add m to its basis
+            quotient_ring_basis.append(monomial)
+
+            # Add a new row to the echelon form of the quotient ring basis
+            pivot = next(j for j in range(dim) if v[j])
+            inv = pow(v[pivot], -1, p)
+            normal_form_weights = {monomial: inv}
+            normal_form_weights |= _poly_fp_scale(transform, -inv, p)
+            echelon.append((pivot, [(x * inv) % p for x in v], normal_form_weights))
+
+            # Successors m * x_i generate all monomials via variable multiplication
+            for i in range(n):
+                next_m = multiply_variable(monomial, i)
+                if next_m not in processed_monomials and next_m not in normal_forms:
+                    normal_forms[next_m] = matvec(M[i], normal_form)
+                    heappush(candidate_monomials, next_m)
+        else:
+            # When v = 0, NormalForm(m) is linearly dependent with respect to
+            # the quotient ring, so m + sum lambda_v * first(v) is a new basis element
+            polynomial = {monomial: 1} | _poly_fp_scale(transform, -1, p)
+            lex_basis.append(polynomial)
+            staircase.append(monomial)
+
+    return lex_basis
+
+def _best_univariate(
+    polynomials: list[Polynomial[int]],
+    bounds: tuple[int, ...],
+) -> tuple[int, list[int]] | None:
+    """
+    Find the cheapest univariate polynomial across all variables.
+    """
+    candidates = [
+        ((i, c), (len(c), bounds[i], len(f)))
+        for f in polynomials for i in range(len(bounds))
+        if (c := _poly_univariate_coefficients(f, i)) is not None
     ]
+    return min(candidates, key=lambda x: x[1])[0] if candidates else None
 
 def _find_integer_roots_bounded_univariate(
     coefficients: list[int],
@@ -4894,100 +5220,25 @@ def _find_integer_roots_bounded_univariate(
     roots = (r if r < mod // 2 else r - mod for r in hensel(coefficients, p, k))
     return {r for r in roots if abs(r) < bound and f(r) == 0}
 
-def _brute_force_polynomial_system(
+def _solve_by_substitution(
     polynomials: list[Polynomial[int]],
     bounds: tuple[int, ...],
-    mod: int = None,
-    brute_force_limit: int = 1000000,
-) -> list[tuple[int, ...]] | None:
+    variable_index: int,
+    values: Iterable[int],
+) -> tuple[tuple[int, ...], ...]:
     """
-    Use exhaustive search to find all small roots
-    to a system of multivariate polynomials fₖ(x) = 0 where x = (x₁, x₂, ...).
+    Substitute each value at the given variable index,
+    and recursively solve the reduced system.
     """
-    ranges = [range(-b + 1, b) for b in bounds]
-    if prod(2*b - 1 for b in bounds) > brute_force_limit:
-        return None
-    elif not polynomials:
-        return list(itertools.product(*ranges))
-    else:
-        is_root = lambda f, x: (_poly_eval(f, x, mod) == 0)
-        points = itertools.product(*ranges)
-        return sorted(x for x in points if all(is_root(f, x) for f in polynomials))
-
-def _solve_polynomial_system(
-    polynomials: list[Polynomial[int]],
-    bounds: tuple[int, ...],
-    max_backtrack_values: int = 200000,
-) -> list[tuple[int, ...]]:
-    """
-    Find integer solutions to a system of multivariate polynomials
-    fₖ(x) = 0 where x = (x₁, x₂, ...) and |xᵢ| < bounds[i] for each variable xᵢ.
-
-    Solves by eliminating one variable at a time and backtracking.
-    """
-    polynomials = [f for f in polynomials if f]
-    if len(bounds) == 0:
-        return [()]
-
-    # Try brute force if bounds are small enough
-    solutions = _brute_force_polynomial_system(polynomials, bounds)
-    if solutions is not None:
-        return solutions
-
-    # Identify the best univariate polynomial within a group of candidates
-    def best_univariate(polynomials: list[dict]) -> tuple[int, list[int]] | None:
-        candidates = [
-            ((i, coefficients), (len(coefficients), bound, len(f)))
-            for f in polynomials
-            for i, bound in enumerate(bounds)
-            if (coefficients := _poly_univariate_coefficients(f, i))
-        ]
-        return min(candidates, key=lambda x: x[1])[0] if candidates else None
-
-    # Search for a univariate polynomial among the input polynomials
-    # or derive one via Gröbner basis computation
-    if (best := best_univariate(polynomials)) is None:
-        if (G := _grobner_basis(polynomials)) is None:
-            return []  # inconsistent system, no solutions
-        else:
-            best = best_univariate(G)
-
-    # Determine values to try
-    if best is not None:
-        i, coefficients = best
-        values = _find_integer_roots_bounded_univariate(coefficients, bounds[i])
-    else:
-        b = min(bounds[0], (max_backtrack_values + 1) // 2)
-        i, values = 0, range(-b + 1, b)
-
-    # Substitute x_i = v for our chosen variable over each of the potential values
     solutions = set()
-    for value in values:
-        if (next_polynomials := _poly_apply_value(polynomials, i, value)) is not None:
-            for sol in _solve_polynomial_system(
-                next_polynomials,
-                bounds[:i] + bounds[i + 1:],  # remove i-th bound
-                max_backtrack_values,
-            ):
-                solutions.add(sol[:i] + (value,) + sol[i:])  # reinsert for x_i
+    reduced_bounds = bounds[:variable_index] + bounds[variable_index+1:]
+    for v in values:
+        reduced_system = _poly_apply_value(polynomials, variable_index, v)
+        if reduced_system is not None:
+            for root in solve_polynomial_system(reduced_system, reduced_bounds):
+                solutions.add(root[:variable_index] + (v,) + root[variable_index:])
 
-    return sorted(solutions)
-
-def _permute_variables(
-    polynomials: list[Polynomial],
-    bounds: tuple[int, ...],
-) -> tuple[list[Polynomial], tuple[int, ...], dict[int, int]]:
-    """
-    Permute variables so smallest bounds come first.
-    Returns (polynomials, bounds, index_dict).
-    """
-    permutation = sorted(range(len(bounds)), key=lambda i: (bounds[i], i))
-    polynomials = [
-        {tuple(monomial[i] for i in permutation): c for monomial, c in f.items() if c}
-        for f in polynomials
-    ]
-    bounds = tuple(bounds[i] for i in permutation)
-    return polynomials, bounds, {j: i for i, j in enumerate(permutation)}
+    return tuple(sorted(solutions))
 
 
 
@@ -5174,9 +5425,21 @@ def small_roots(
     if bounds is None and num_variables == 1:
         bounds = (max(2, iroot(M, degree)),)
 
-    # If bounds are small enough, brute force the original congruence
-    if (roots := _brute_force_polynomial_system([f], bounds, mod=M)) is not None:
-        return roots
+    # Check if Howgrave-Graham shortcut applies
+    # When max |f(x)| < M is within bounds, simply find exact roots
+    max_abs = sum(
+        abs(coefficient) * prod((b - 1) ** e for b, e in zip(bounds, monomial))
+        for monomial, coefficient in f.items()
+    )
+    if max_abs < M:
+        return sorted(solve_polynomial_system([f], bounds))
+
+    # Direct evaluation for small search spaces
+    if prod(2 * b - 1 for b in bounds) <= 10_000:
+        return sorted(
+            x for x in itertools.product(*(range(-b + 1, b) for b in bounds))
+            if _poly_eval(f, x) % M == 0
+        )
 
     # Build lattice, reduce via LLL, and extract relations satisfying Howgrave-Graham.
     weights = _monomial_weights_from_bounds(bounds)
@@ -5365,74 +5628,6 @@ def _lll_reduce_block(
 
     return B
 
-def _bkz_tour(
-    B: Matrix[int],
-    block_size: int,
-    pruning: bool = False,
-    delta: float = 0.99,
-    exact: bool = False,
-) -> tuple[Matrix[int], bool]:
-    """
-    Perform a single BKZ tour, with size reduction followed by block improvements.
-    Returns the updated basis and whether any improvement was made.
-    """
-    n, dim = len(B), len(B[0]) if B else 0
-    mu, _, bstar_squared_norm = _gso(B, exact=exact)
-
-    # Size reduction to make |μ_{i,j}| <= 0.5 for all j < i
-    changed = False
-    for i in range(1, n):
-        for j in range(i - 1, -1, -1):
-            if q := _nearest_int(mu[i][j]):
-                changed = True
-                B[i] = [B[i][t] - q * B[j][t] for t in range(dim)]
-                mu[i][:j+1] = [mu[i][t] - q * mu[j][t] for t in range(j + 1)]
-
-    # Update GSO coefficients
-    if changed:
-        mu, _, bstar_squared_norm = _gso(B, exact=exact)
-
-    # Slide window [k, k+block_size), find SVP in projected block, insert if shorter
-    k, improved = 0, False
-    while k < n - 1:
-        end = min(k + block_size, n)
-        if end - k <= 1 or bstar_squared_norm[k] == 0:
-            k += 1
-            continue
-
-        # Find shortest vector in projected block [k, end)
-        coefficients, svp_squared_norm = _enumerate_svp_block(
-            mu, bstar_squared_norm, k, end, pruning)
-        if not coefficients or svp_squared_norm >= bstar_squared_norm[k] * (1 - 1e-12):
-            k += 1
-            continue
-
-        # We've found an improvement, so insert v = Σ c_i * b_{k+i} into basis
-        improved = True
-        v = [
-            sum(c * B[k + i][t] for i, c in enumerate(coefficients) if c)
-            for t in range(dim)
-        ]
-        B.insert(k, v)
-
-        # LLL-reduce window to restore Lovasz condition
-        # This creates a linear dependency, which we remove
-        _lll_reduce_block(B, k, end + 1, delta=delta, exact=exact)
-
-        # Remove the dependent vector (zero GSO norm) to restore original basis size
-        mu, _, bstar_squared_norm = _gso(B, exact=exact)
-        for i in range(k, min(end + 1, len(B))):
-            if bstar_squared_norm[i] == 0:
-                B.pop(i)
-                mu, _, bstar_squared_norm = _gso(B, exact=exact)
-                break
-        else:
-            raise _PrecisionError("BKZ: failed to find dependent vector")
-
-        k = max(0, k - 1)  # Re-check previous blocks since basis changed
-
-    return B, improved
-
 def _enumerate_svp_block(
     mu: Matrix[Real],
     bstar_squared_norm: Vector[Real],
@@ -5509,6 +5704,74 @@ def _enumerate_svp_block(
                 i += 1  # no values left, backtrack to previous index
 
     return best_coefficients, best_squared_norm
+
+def _bkz_tour(
+    B: Matrix[int],
+    block_size: int,
+    pruning: bool = False,
+    delta: float = 0.99,
+    exact: bool = False,
+) -> tuple[Matrix[int], bool]:
+    """
+    Perform a single BKZ tour, with size reduction followed by block improvements.
+    Returns the updated basis and whether any improvement was made.
+    """
+    n, dim = len(B), len(B[0]) if B else 0
+    mu, _, bstar_squared_norm = _gso(B, exact=exact)
+
+    # Size reduction to make |μ_{i,j}| <= 0.5 for all j < i
+    changed = False
+    for i in range(1, n):
+        for j in range(i - 1, -1, -1):
+            if q := _nearest_int(mu[i][j]):
+                changed = True
+                B[i] = [B[i][t] - q * B[j][t] for t in range(dim)]
+                mu[i][:j+1] = [mu[i][t] - q * mu[j][t] for t in range(j + 1)]
+
+    # Update GSO coefficients
+    if changed:
+        mu, _, bstar_squared_norm = _gso(B, exact=exact)
+
+    # Slide window [k, k+block_size), find SVP in projected block, insert if shorter
+    k, improved = 0, False
+    while k < n - 1:
+        end = min(k + block_size, n)
+        if end - k <= 1 or bstar_squared_norm[k] == 0:
+            k += 1
+            continue
+
+        # Find shortest vector in projected block [k, end)
+        coefficients, svp_squared_norm = _enumerate_svp_block(
+            mu, bstar_squared_norm, k, end, pruning)
+        if not coefficients or svp_squared_norm >= bstar_squared_norm[k] * (1 - 1e-12):
+            k += 1
+            continue
+
+        # We've found an improvement, so insert v = Σ c_i * b_{k+i} into basis
+        improved = True
+        v = [
+            sum(c * B[k + i][t] for i, c in enumerate(coefficients) if c)
+            for t in range(dim)
+        ]
+        B.insert(k, v)
+
+        # LLL-reduce window to restore Lovasz condition
+        # This creates a linear dependency, which we remove
+        _lll_reduce_block(B, k, end + 1, delta=delta, exact=exact)
+
+        # Remove the dependent vector (zero GSO norm) to restore original basis size
+        mu, _, bstar_squared_norm = _gso(B, exact=exact)
+        for i in range(k, min(end + 1, len(B))):
+            if bstar_squared_norm[i] == 0:
+                B.pop(i)
+                mu, _, bstar_squared_norm = _gso(B, exact=exact)
+                break
+        else:
+            raise _PrecisionError("BKZ: failed to find dependent vector")
+
+        k = max(0, k - 1)  # Re-check previous blocks since basis changed
+
+    return B, improved
 
 def _monomial_weights_from_bounds(bounds: tuple[int, ...]) -> tuple[int, ...]:
     """
@@ -5592,18 +5855,16 @@ def _choose_jochemsz_may_params(
     # Set initial m parameter based on epsilon
     m0 = max(1, ceil(1 / (max(1, _poly_degree(f)) * epsilon)))
 
-    # Scan from m0 down, collect (m, t) candidates where the resulting lattice fits
-    candidates = []
+    # Pick smallest m whose lattice is sufficiently overdetermined (rows - cols >= n)
+    num_variables = len(bounds)
     f_weighted_degree = _poly_degree(f, weights=_monomial_weights_from_bounds(bounds))
-    for m in range(m0, 0, -1):
+    for m in range(1, m0 + 1):
         t = m * f_weighted_degree
         polynomials, basis = _build_coppersmith_shifts(f, bounds, M, m, t)
-        rows, cols = len(polynomials), len(basis)
-        if rows:
-            key = (rows - cols, -abs(rows - cols), rows)
-            candidates.append((key, (m, polynomials, basis)))
+        if len(polynomials) - len(basis) >= num_variables:
+            return (m, polynomials, basis)
 
-    return max(candidates)[1] if candidates else (0, [], [])
+    return (m0, polynomials, basis)
 
 def _make_coppersmith_lattice(
     shifted_polynomials: list[Polynomial[int]],

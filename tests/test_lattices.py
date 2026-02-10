@@ -806,135 +806,82 @@ class TestSmallRoots(unittest.TestCase):
             (0, 2): 16,
             (1, 1): -20,
         }
-        bounds = (6, 6)
-        expected = [(-3, 5), (4, 3)]
-        called = {"choose": False, "brute_mod": False}
+        bounds = (71, 71)
+        expected = [(-3, 5), (0, -19), (0, 6), (4, -11), (4, 3)]
+        called = {"choose": False}
         orig_choose = UT._choose_jochemsz_may_params
-        orig_brute = UT._brute_force_polynomial_system
 
         def choose_wrapper(*args: Any, **kwargs: Any):
             called["choose"] = True
             return orig_choose(*args, **kwargs)
 
-        def brute_wrapper(
-            polynomials: list[dict[tuple[int, ...], int]],
-            bounds: tuple[int, ...],
-            mod: int | None = None,
-            brute_force_limit: int = 1_000_000,
-        ):
-            if mod is not None:
-                called["brute_mod"] = True
-                return None
-            return orig_brute(
-                polynomials, bounds, mod=mod, brute_force_limit=brute_force_limit)
-
         try:
             UT._choose_jochemsz_may_params = choose_wrapper
-            UT._brute_force_polynomial_system = brute_wrapper
             roots = UT.small_roots(coeffs, 101, bounds=bounds, epsilon=0.2)
         finally:
             UT._choose_jochemsz_may_params = orig_choose
-            UT._brute_force_polynomial_system = orig_brute
 
         self.assertTrue(called["choose"])
-        self.assertTrue(called["brute_mod"])
         self.assertEqual(sorted(roots), expected)
 
     def test_multivariate_large_bounds_uses_lattice_path(self) -> None:
-        # Bounds chosen so (2B-1)^2 > 1e6 to skip brute force.
+        # Coefficients scaled by A=2 so max |f(x)| within bounds exceeds M,
+        # bypassing the Howgrave-Graham shortcut and forcing the lattice path.
         B = 501
         x0, y0 = 123, -77
+        A = 2
         coeffs = {
-            (2, 0): 1,
-            (0, 2): 1,
-            (1, 0): -2 * x0,
-            (0, 1): -2 * y0,
-            (0, 0): x0 * x0 + y0 * y0,
+            (2, 0): A,
+            (0, 2): A,
+            (1, 0): -2 * x0 * A,
+            (0, 1): -2 * y0 * A,
+            (0, 0): (x0 * x0 + y0 * y0) * A,
         }
-        called = {"choose": False, "brute": False}
+        called = {"choose": False}
         orig_choose = UT._choose_jochemsz_may_params
-        orig_brute = UT._brute_force_polynomial_system
 
         def choose_wrapper(*args: Any, **kwargs: Any):
             called["choose"] = True
             return orig_choose(*args, **kwargs)
 
-        def brute_wrapper(
-            polynomials: list[dict[tuple[int, ...], int]],
-            bounds: tuple[int, ...],
-            mod: int | None = None,
-            brute_force_limit: int = 1_000_000,
-        ):
-            called["brute"] = True
-            size = 1
-            for bound in bounds:
-                size *= 2 * bound - 1
-            if bounds == (B, B):
-                if size <= brute_force_limit:
-                    raise AssertionError("expected lattice path, brute force allowed")
-                return None
-            return orig_brute(
-                polynomials, bounds, mod=mod, brute_force_limit=brute_force_limit)
-
         try:
             UT._choose_jochemsz_may_params = choose_wrapper
-            UT._brute_force_polynomial_system = brute_wrapper
             roots = UT.small_roots(coeffs, 1_000_003, bounds=(B, B), epsilon=0.3)
         finally:
             UT._choose_jochemsz_may_params = orig_choose
-            UT._brute_force_polynomial_system = orig_brute
 
-        self.assertTrue(called["brute"])
         self.assertTrue(called["choose"])
         self.assertEqual(roots, [(x0, y0)])
 
     def test_trivariate_large_bounds_uses_lattice_path(self) -> None:
-        # Bounds chosen so (2B-1)^3 > 1e6 to skip brute force.
+        # Coefficients scaled by A=100 so max |f(x)| within bounds exceeds M,
+        # bypassing the Howgrave-Graham shortcut and forcing the lattice path.
         B = 55
         x0, y0, z0 = 12, -7, 5
+        A = 100
         coeffs = {
-            (2, 0, 0): 1,
-            (0, 2, 0): 1,
-            (0, 0, 2): 1,
-            (1, 0, 0): -2 * x0,
-            (0, 1, 0): -2 * y0,
-            (0, 0, 1): -2 * z0,
-            (0, 0, 0): x0 * x0 + y0 * y0 + z0 * z0,
+            (2, 0, 0): A,
+            (0, 2, 0): A,
+            (0, 0, 2): A,
+            (1, 0, 0): -2 * x0 * A,
+            (0, 1, 0): -2 * y0 * A,
+            (0, 0, 1): -2 * z0 * A,
+            (0, 0, 0): (x0 * x0 + y0 * y0 + z0 * z0) * A,
         }
         bounds = (B, B, B)
-        called = {"choose": False, "brute": False}
+        called = {"choose": False}
         orig_choose = UT._choose_jochemsz_may_params
-        orig_brute = UT._brute_force_polynomial_system
 
         def choose_wrapper(*args: Any, **kwargs: Any):
             called["choose"] = True
             return orig_choose(*args, **kwargs)
 
-        def brute_wrapper(
-            polynomials: list[dict[tuple[int, ...], int]],
-            bounds: tuple[int, ...],
-            mod: int | None = None,
-            brute_force_limit: int = 1_000_000,
-        ):
-            called["brute"] = True
-            size = 1
-            for bound in bounds:
-                size *= 2 * bound - 1
-            if bounds == (B, B, B) and mod is not None:
-                if size <= brute_force_limit:
-                    raise AssertionError("expected lattice path, brute force allowed")
-                return None
-            return orig_brute(polynomials, bounds, mod=mod, brute_force_limit=brute_force_limit)
-
         try:
             UT._choose_jochemsz_may_params = choose_wrapper
-            UT._brute_force_polynomial_system = brute_wrapper
             roots = UT.small_roots(coeffs, 1_000_003, bounds=bounds, epsilon=0.45)
         finally:
             UT._choose_jochemsz_may_params = orig_choose
-            UT._brute_force_polynomial_system = orig_brute
 
-        self.assertTrue(called["brute"])
         self.assertTrue(called["choose"])
         self.assertEqual(roots, [(x0, y0, z0)])
 
