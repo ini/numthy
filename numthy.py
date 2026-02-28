@@ -29,7 +29,7 @@ from typing import Callable, Collection, Iterator, TypeAlias, TypeVar
 ########################### Table of Contents ##########################
 ########################################################################
 
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 __all__ = [
     'Number', 'Vector', 'Matrix', 'Monomial', 'Polynomial', 'clear_cache',
@@ -5020,7 +5020,7 @@ def _gvw(polynomials: list[Polynomial[int]], p: int) -> list[Polynomial[int]] | 
         v1 = _poly_fp_monic(v1, p)
         basis.append((T1, v1, lm_v1))
 
-        # Update with new syzigies and J-pairs
+        # Update with new syzygies and J-pairs
         for T2, v2, lm_v2 in basis:
             # Store the leading terms of the principal syzygies v2*u1 - v1*u2
             # That is, leading term T = max(T1*lm(v2), T2*lm(v1))
@@ -5367,7 +5367,7 @@ def closest_vector(B: Matrix[int], target: Vector[int]) -> Vector[int]:
     return [sum(c * b_i[j] for c, b_i in zip(coefficients, B) if c) for j in range(dim)]
 
 def small_roots(
-    polynomial: Polynomial[int],
+    f: Polynomial[int],
     mod: int,
     bounds: tuple[int, ...] | None = None,
     *,
@@ -5384,7 +5384,7 @@ def small_roots(
 
     Parameters
     ----------
-    polynomial : dict[tuple[int, ...], int]
+    f : dict[tuple[int, ...], int]
         Multivariate polynomial with integer coefficients as {monomial: coefficient}
         where each monomial is a tuple indicating the exponents for each variable
         (e.g. {(1, 0): 5, (0, 1): 3, (0, 0): -7} represents 5x + 3y - 7)
@@ -5406,7 +5406,7 @@ def small_roots(
     if (M := abs(mod)) == 0:
         raise ZeroDivisionError("Modulus must be nonzero")
 
-    f = {m: r - M if r > M // 2 else r for m, c in polynomial.items() if (r := c % M)}
+    f = {m: r - M if r > M // 2 else r for m, c in f.items() if (r := c % M)}
     num_variables = _poly_num_variables(f)
 
     # Input validation
@@ -5908,7 +5908,7 @@ def _extract_coppersmith_relations(
 def _select_coppersmith_polynomials(
     polynomials: list[Polynomial[int]],
     weights: tuple[int, ...],
-    basis_index: Polynomial[int],
+    basis_index: dict[Monomial, int],
     max_polynomials: int = 8,
 ) -> list[Polynomial[int]]:
     """
